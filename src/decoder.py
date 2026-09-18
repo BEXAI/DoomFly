@@ -9,6 +9,12 @@ Two modes, both operating only on spikes of real MaleCNS output neurons
           the panel of the pool whose z crosses `threshold` (refractory >= 250 ms).
           Used when the leg MNs respond to visual drive on their own.
 
+  burst   No fit. A swipe is triggered when the z-scored fast trace of the whole
+          descending-neuron population crosses `threshold` (a DN burst); the panel is the
+          side whose visual projection neurons (VPN L vs R) carried more of the recent
+          activity, i.e. the eye that saw the change (the wiring's ipsilateral early
+          response). Uses only real-neuron spike counts.
+
   ridge   A fitted *linear* readout (ridge regression) from two exponential traces
           (fast ~80 ms, slow ~800 ms) of every output cell's rate to a teacher signal
           ("swipe this panel now"), as hotocoo/malecns `calibrate.py` does. The only
@@ -84,7 +90,7 @@ class Decoder:
     def __init__(self, mode: str, cfg: DecoderConfig, n_cells: int,
                  pool_masks: Optional[Dict[str, np.ndarray]] = None,
                  readout: Optional[Dict[str, np.ndarray]] = None):
-        assert mode in ("direct", "ridge", "teacher")
+        assert mode in ("direct", "ridge", "teacher", "burst")
         self.mode = mode
         self.cfg = cfg
         self.feats = Features(n_cells, cfg)
@@ -95,12 +101,22 @@ class Decoder:
         self.last_swipe = {"L": -1e9, "R": -1e9}
         self.last_value = {"L": 0.0, "R": 0.0}
         self.last_features: Optional[np.ndarray] = None
+        # burst mode state: fast traces of DN population and of VPN L / R
+        self.z_dn = RunningZ(cfg.tau_baseline_s, cfg.control_dt_s)
+        self.a_fast = float(np.exp(-cfg.control_dt_s / cfg.tau_fast_s))
+        self.dn_fast = 0.0
+        self.vpn_fast = {"L": 0.0, "R": 0.0}
+        self.last_side_evidence = 0.0
 
-    def step(self, t: float, counts: np.ndarray) -> Optional[str]:
+    def step(self, t: float, counts: np.ndarray, aux: Optional[Dict[str, int]] = None) -> Optional[str]:
+        """counts: spikes of each readout cell this control step; aux: population spike
+        counts this step (needs 'dn_L','dn_R','vpn_L','vpn_R' for burst mode)."""
         f = self.feats.update(counts)
         self.last_features = f
         if self.mode == "teacher":
             return None
+        if self.mode == "burst":
+            return self._step_burst(t, aux or {})
         raw = {}
         if self.mode == "direct":
             for p in ("L", "R"):
@@ -120,6 +136,28 @@ class Decoder:
         if out is not None:
             self.last_swipe[out] = t
         return out
+
+
+    def _step_burst(self, t: float, aux: Dict[str, int]) -> Optional[str]:
+        a = self.a_fast
+        dn = float(aux.get("dn_L", 0) + aux.get("dn_R", 0))
+        self.dn_fast = a * self.dn_fast + (1 - a) * dn
+        for p in "LR":
+            self.vpn_fast[p] = a * self.vpn_fast[p] + (1 - a) * float(aux.get("vpn_" + p, 0))
+        z = self.z_dn.update(self.dn_fast)
+        ev = self.vpn_fast["L"] - self.vpn_fast["R"]
+        self.last_side_evidence = ev
+        # expose per-panel values for logging: DN z signed by side evidence
+        self.last_value = {"L": z if ev >= 0 else 0.0, "R": z if ev < 0 else 0.0}
+        if t < self.cfg.warmup_s or z <= self.cfg.threshold_z:
+            return None
+        if abs(ev) < 1e-6:
+            return None
+        p = "L" if ev > 0 else "R"
+        if t - self.last_swipe[p] < self.cfg.refractory_s:
+            return None
+        self.last_swipe[p] = t
+        return p
 
 
 # ------------------------------------------------------------------ ridge fit

@@ -37,7 +37,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--duration", type=float, default=50.0, help="seconds of video/brain time")
-    ap.add_argument("--mode", choices=["teacher", "ridge", "direct"], default="ridge")
+    ap.add_argument("--mode", choices=["teacher", "ridge", "direct", "burst"], default="ridge")
     ap.add_argument("--readout", default=os.path.join(ROOT, "out", "readout.npz"))
     ap.add_argument("--weight-scale", type=float, default=0.15)
     ap.add_argument("--adapt-mv", type=float, default=0.6)
@@ -137,7 +137,8 @@ def main():
                 np.add.at(counts_ro, ro_pos[hit], 1)
         rec.end_frame()
 
-        swipe = dec.step(t, counts_ro)
+        rec_pops = {p: rec.pop_counts[p][-1] for p in pops}
+        swipe = dec.step(t, counts_ro, rec_pops)
         y = np.zeros(2, np.float32)
         if args.mode == "teacher":
             for i, p in enumerate("LR"):
@@ -151,7 +152,6 @@ def main():
         elif swipe == "R":
             feedR.swipe(); n_swipes["R"] += 1
 
-        rec_pops = {p: rec.pop_counts[p][-1] for p in pops}
         ev.write(json.dumps(dict(
             step=k, t=round(t, 4), swipe=swipe,
             readout={"L": round(dec.last_value["L"], 3), "R": round(dec.last_value["R"], 3)},
