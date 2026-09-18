@@ -89,6 +89,9 @@ def main():
         "vpn_L": conn.idx("vpn_left"), "vpn_R": conn.idx("vpn_right"),
         "dn_L": conn.idx("dn_left"), "dn_R": conn.idx("dn_right"),
         "leg_L": conn.idx("mn_frontleg_left"), "leg_R": conn.idx("mn_frontleg_right"),
+        # medulla cells one synapse downstream of the driven lamina cells (side evidence)
+        "med_L": np.unique(np.concatenate([conn.idx(f"eye_left_{t}") for t in ("Mi1", "Tm1", "Tm2", "Tm9", "L5")])),
+        "med_R": np.unique(np.concatenate([conn.idx(f"eye_right_{t}") for t in ("Mi1", "Tm1", "Tm2", "Tm9", "L5")])),
     }
     readout_cells = np.unique(np.concatenate([conn.idx("dn_all"), conn.idx("mn_all")]))
     ro_mask = np.zeros(conn.n, bool); ro_mask[readout_cells] = True
@@ -103,7 +106,7 @@ def main():
 
     # decoder
     dcfg = DecoderConfig(control_dt_s=control_dt, refractory_s=args.refractory, burst_hz=args.burst_hz, n_dn=int(conn.idx("dn_all").size),
-                         n_ol={"L": int(pops["ol_L"].size - pops["eye_L"].size), "R": int(pops["ol_R"].size - pops["eye_R"].size)})
+                         n_ol={"L": int(pops["med_L"].size), "R": int(pops["med_R"].size)})
     readout = None
     if args.mode == "ridge":
         readout = load_readout(args.readout)

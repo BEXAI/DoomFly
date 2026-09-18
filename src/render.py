@@ -787,7 +787,9 @@ class BrainPiP:
         P = pos[valid].astype(np.float64)
         P -= P.mean(axis=0)
         yaw, tilt = math.radians(18.0), math.radians(-10.0)
-        x, y, z = P[:, 0], P[:, 1], P[:, 2]
+        # Mirror x: the volume's x axis runs from the fly's right to its left (anterior view),
+        # while the fly in the scene is drawn head-up with its left at the viewer's left.
+        x, y, z = -P[:, 0], P[:, 1], P[:, 2]
         x1 = x * math.cos(yaw) + z * math.sin(yaw)
         z1 = -x * math.sin(yaw) + z * math.cos(yaw)
         y1 = y * math.cos(tilt) - z1 * math.sin(tilt)
@@ -984,7 +986,7 @@ class Renderer:
     def draw_top_left(self, frame: np.ndarray, t: float) -> None:
         T = self.text
         T.draw(frame, "MaleCNS v1.0 connectome · LIF spiking network", 40, 68, 26, COL_GREY)
-        T.draw(frame, "MOTOR READOUT (z)", 40, 118, 32, COL_WHITE, True)
+        T.draw(frame, "DESCENDING-NEURON BURST (swipe trigger)", 40, 118, 32, COL_WHITE, True)
         for i, side in enumerate(("L", "R")):
             y0 = 178 + i * 74
             colr = COL_L if side == "L" else COL_R

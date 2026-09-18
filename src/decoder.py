@@ -11,8 +11,8 @@ Two modes, both operating only on spikes of real MaleCNS output neurons
 
   burst   No fit. A swipe is triggered when the z-scored fast trace of the whole
           descending-neuron population crosses `threshold` (a DN burst); the panel is the
-          side whose optic lobe (intrinsic cells downstream of the driven lamina cells,
-          per cell) carried more of the recent activity, i.e. the eye that saw the
+          side whose medulla (Mi1/Tm1/Tm2/Tm9/L5, one synapse downstream of the driven
+          lamina cells, per cell) carried more of the recent activity, i.e. the eye that saw the
           change. Uses only real-neuron spike counts; nothing is fitted.
 
   ridge   A fitted *linear* readout (ridge regression) from two exponential traces
@@ -155,7 +155,11 @@ class Decoder:
         for p in "LR":
             # side evidence: this side's optic-lobe activity *downstream* of the driven
             # lamina cells (ol minus L1/L2), per cell; falls back to VPNs if absent
-            if "ol_" + p in aux:
+            if "med_" + p in aux:
+                # medulla cells (Mi1, Tm1, Tm2, Tm9, L5) one synapse downstream of the driven
+                # lamina cells: strictly ipsilateral, per-cell rate
+                x = float(aux["med_" + p]) / max(1.0, float(self.cfg.n_ol.get(p, 1)))
+            elif "ol_" + p in aux:
                 x = (float(aux["ol_" + p]) - float(aux.get("eye_" + p, 0))) / max(1.0, float(self.cfg.n_ol.get(p, 1)))
             else:
                 x = float(aux.get("vpn_" + p, 0))
@@ -165,8 +169,7 @@ class Decoder:
             z = self.dn_fast / (self.cfg.n_dn * self.cfg.control_dt_s) / self.cfg.burst_hz * self.cfg.threshold_z
         else:
             z = self.z_dn.update(self.dn_fast)
-        zs = {p: self.z_side[p].update(self.vpn_fast[p]) for p in "LR"}
-        ev = zs["L"] - zs["R"]
+        ev = self.vpn_fast["L"] - self.vpn_fast["R"]   # raw per-cell medulla rate difference
         self.last_side_evidence = ev
         # expose per-panel values for logging: burst signal assigned to the evidenced side
         self.last_value = {"L": z if ev >= 0 else 0.0, "R": z if ev < 0 else 0.0}
