@@ -986,7 +986,7 @@ class Renderer:
     def draw_top_left(self, frame: np.ndarray, t: float) -> None:
         T = self.text
         T.draw(frame, "MaleCNS v1.0 connectome · LIF spiking network", 40, 68, 26, COL_GREY)
-        T.draw(frame, "DESCENDING-NEURON BURST (swipe trigger)", 40, 118, 32, COL_WHITE, True)
+        T.draw(frame, "DN BURST \u2192 SWIPE", 40, 118, 32, COL_WHITE, True)
         for i, side in enumerate(("L", "R")):
             y0 = 178 + i * 74
             colr = COL_L if side == "L" else COL_R
