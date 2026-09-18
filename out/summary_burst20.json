@@ -1,0 +1,29 @@
+{
+ "mode": "burst",
+ "duration": 20.0,
+ "swipes": {
+  "L": 0,
+  "R": 0
+ },
+ "posts": {
+  "L": 0,
+  "R": 0
+ },
+ "total_spikes": 48650,
+ "mean_pop_rate_hz": 0.014592081583683263,
+ "wall_s": 12.053921699523926,
+ "ms_per_control_step": 9.643137359619141,
+ "events": "/home/user/DoomFly/out/events_burst20.jsonl",
+ "pop_rates_hz": {
+  "eye_L": 0.0,
+  "eye_R": 0.0,
+  "ol_L": 0.0,
+  "ol_R": 0.05430172336815787,
+  "vpn_L": 0.0,
+  "vpn_R": 0.0,
+  "dn_L": 0.0,
+  "dn_R": 0.0,
+  "leg_L": 0.0,
+  "leg_R": 0.0
+ }
+}

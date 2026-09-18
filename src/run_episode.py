@@ -45,6 +45,7 @@ def main():
     ap.add_argument("--std-tau", type=float, default=480.0, help="STD recovery time constant (ms)")
     ap.add_argument("--rate-max", type=float, default=150.0)
     ap.add_argument("--enc-gain", type=float, default=6.0)
+    ap.add_argument("--tonic-hz", type=float, default=0.0, help="spontaneous baseline rate of every driven lamina cell (steady-light activity)")
     ap.add_argument("--grid", type=int, nargs=2, default=(24, 18))
     ap.add_argument("--threshold", type=float, default=None, help="decoder z threshold (default: from readout file or 2.5)")
     ap.add_argument("--refractory", type=float, default=0.4)
@@ -91,7 +92,7 @@ def main():
 
     # feeds + eyes
     feedL, feedR = make_pair(args.seed_l, args.seed_r, scale=0.25)
-    encL, encR = make_encoders(grid=tuple(args.grid), rate_max_hz=args.rate_max, gain=args.enc_gain)
+    encL, encR = make_encoders(grid=tuple(args.grid), rate_max_hz=args.rate_max, gain=args.enc_gain, tonic_hz=args.tonic_hz)
     print(f"eye L drives {encL.idx_L1.size + encL.idx_L2.size} lamina cells, eye R {encR.idx_L1.size + encR.idx_L2.size}")
 
     # decoder
@@ -110,7 +111,7 @@ def main():
     meta = dict(meta=dict(seed_l=args.seed_l, seed_r=args.seed_r, mode=args.mode, duration=args.duration,
                           control_dt=control_dt, substeps=substeps, lif=cfg.to_json(), n_neurons=conn.n,
                           n_edges=int(conn.W.nnz), shuffle=args.shuffle, threshold_z=dcfg.threshold_z,
-                          readout_cells=int(readout_cells.size), grid=list(args.grid), rate_max=args.rate_max))
+                          readout_cells=int(readout_cells.size), grid=list(args.grid), rate_max=args.rate_max, tonic_hz=args.tonic_hz))
     ev.write(json.dumps(meta) + "\n")
 
     X, Y = [], []

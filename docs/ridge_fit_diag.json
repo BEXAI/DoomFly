@@ -1,0 +1,17 @@
+{
+ "lambda_": 3000,
+ "heldout_corr_L": 0.018637351038537392,
+ "heldout_corr_R": 0.06062718665920602,
+ "heldout_r2": [
+  -0.26119274765774336,
+  -0.1934552570348287
+ ],
+ "suggested_threshold": 3.5291526157380426,
+ "T": 6250,
+ "F": 4258,
+ "teacher_swipes": 138,
+ "readout_L_mean_at_own_events": 3.101877201327327,
+ "readout_L_mean_at_other_events": 0.08868837467310192,
+ "readout_R_mean_at_own_events": 3.0590948376836837,
+ "readout_R_mean_at_other_events": 0.08649145454348195
+}
