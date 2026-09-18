@@ -41,6 +41,8 @@ def main():
     ap.add_argument("--readout", default=os.path.join(ROOT, "out", "readout.npz"))
     ap.add_argument("--weight-scale", type=float, default=0.15)
     ap.add_argument("--adapt-mv", type=float, default=0.6)
+    ap.add_argument("--std-u", type=float, default=0.0, help="short-term depression U per spike (flybrain: 0.08)")
+    ap.add_argument("--std-tau", type=float, default=480.0, help="STD recovery time constant (ms)")
     ap.add_argument("--rate-max", type=float, default=150.0)
     ap.add_argument("--enc-gain", type=float, default=6.0)
     ap.add_argument("--grid", type=int, nargs=2, default=(24, 18))
@@ -68,7 +70,7 @@ def main():
     if args.shuffle is not None:
         print(f"using wiring-shuffled control graph (seed {args.shuffle})")
         conn = conn.shuffled(args.shuffle)
-    cfg = LIFConfig(weight_scale=args.weight_scale, adapt_mv=args.adapt_mv)
+    cfg = LIFConfig(weight_scale=args.weight_scale, adapt_mv=args.adapt_mv, std_u=args.std_u, std_tau_rec_ms=args.std_tau)
     brain = Brain(conn, cfg, seed=args.seed)
 
     # populations

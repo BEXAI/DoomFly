@@ -49,6 +49,11 @@ class LIFConfig:
     weight_scale: float = 1.0
     adapt_mv: float = 0.0        # 0 = pure Shiu model; hotocoo uses 0.6
     tau_adapt_ms: float = 120.0
+    # Tsodyks-Markram short-term depression, one resource per PRESYNAPTIC neuron
+    # (TheMrRaGe/flybrain `enable_std`: U measured 0.08, recovery 480 ms; must be global).
+    # 0 = off. Keeps recurrent loops self-limiting so the network does not latch.
+    std_u: float = 0.0
+    std_tau_rec_ms: float = 480.0
 
     def to_json(self) -> Dict:
         return asdict(self)
@@ -131,6 +136,7 @@ class Brain:
         self.j_syn = np.zeros(n, np.float32)    # synaptic drive (mV per step)
         self.adapt = np.zeros(n, np.float32)
         self.refrac = np.zeros(n, np.int16)
+        self.std_x = np.ones(n, np.float32)     # available synaptic resource per presynaptic cell
         self.ring: List[np.ndarray] = [np.zeros(0, np.int64) for _ in range(self.delay_steps)]
         self.pos = 0
         self.t_steps = 0
@@ -142,6 +148,8 @@ class Brain:
         if fired.size == 0:
             return None
         cols = self.W[:, fired]
+        if self.cfg.std_u:
+            return np.asarray(cols @ self.std_x[fired]).ravel().astype(np.float32, copy=False)
         return np.asarray(cols.sum(axis=1)).ravel().astype(np.float32, copy=False)
 
     def step(self, drive_idx: Optional[np.ndarray] = None, drive_rate_hz: Optional[np.ndarray] = None,
@@ -180,6 +188,10 @@ class Brain:
             self.adapt[fired] += 1.0
         self.refrac[self.refrac > 0] -= 1
         self.refrac[fired] = self.ref_steps
+        if c.std_u:
+            # resource recovers toward 1, and each spike consumes a fraction U of what is left
+            self.std_x += (1.0 - self.std_x) * (c.dt_ms / c.std_tau_rec_ms)
+            self.std_x[fired] *= (1.0 - c.std_u)
 
         self.ring[self.pos % self.delay_steps] = fired
         self.pos = (self.pos + 1) % self.delay_steps
