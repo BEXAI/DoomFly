@@ -1,0 +1,180 @@
+{
+ "tag": "final",
+ "duration": 50.0,
+ "n_swipes": 27,
+ "swipes_L": 9,
+ "swipes_R": 18,
+ "swipe_times": [
+  [
+   4.256,
+   "R"
+  ],
+  [
+   4.672,
+   "R"
+  ],
+  [
+   7.616,
+   "R"
+  ],
+  [
+   8.032,
+   "R"
+  ],
+  [
+   11.808,
+   "R"
+  ],
+  [
+   14.0,
+   "R"
+  ],
+  [
+   14.304,
+   "L"
+  ],
+  [
+   14.736,
+   "R"
+  ],
+  [
+   16.592,
+   "R"
+  ],
+  [
+   16.976,
+   "L"
+  ],
+  [
+   17.376,
+   "L"
+  ],
+  [
+   18.592,
+   "R"
+  ],
+  [
+   18.992,
+   "R"
+  ],
+  [
+   19.568,
+   "L"
+  ],
+  [
+   19.984,
+   "L"
+  ],
+  [
+   22.24,
+   "R"
+  ],
+  [
+   22.656,
+   "R"
+  ],
+  [
+   24.08,
+   "R"
+  ],
+  [
+   25.216,
+   "L"
+  ],
+  [
+   27.04,
+   "L"
+  ],
+  [
+   27.648,
+   "R"
+  ],
+  [
+   28.032,
+   "L"
+  ],
+  [
+   30.656,
+   "L"
+  ],
+  [
+   35.648,
+   "R"
+  ],
+  [
+   38.672,
+   "R"
+  ],
+  [
+   42.384,
+   "R"
+  ],
+  [
+   42.8,
+   "R"
+  ]
+ ],
+ "side_matches_eye_onset": 17,
+ "side_match_fraction": 0.6296296296296297,
+ "median_gap_s": 0.8720000000000017,
+ "chains_gap_lt_0p6s": 12,
+ "posts": {
+  "L": 11,
+  "R": 29
+ },
+ "total_spikes": 4956533,
+ "mean_pop_rate_hz": 0.5946650269946011,
+ "dn_rate_hz_mean": 0.7294977168949771,
+ "dn_rate_hz_peak": 24.162861491628615,
+ "dn_rate_at_swipe_hz": 8.103613506962061,
+ "dn_rate_1s_before_swipe_hz": 2.341533250652987,
+ "leg_spikes_after_swipe": {
+  "L": 66.0,
+  "R": 48.629629629629626
+ },
+ "eye_mean_hz": {
+  "L": 35.3392,
+  "R": 40.807904
+ },
+ "meta": {
+  "seed_l": 1,
+  "seed_r": 2,
+  "mode": "burst",
+  "duration": 50.0,
+  "control_dt": 0.016,
+  "substeps": 8,
+  "lif": {
+   "v_rest_mv": -52.0,
+   "v_reset_mv": -52.0,
+   "v_thresh_mv": -45.0,
+   "t_ref_ms": 2.2,
+   "tau_m_ms": 20.0,
+   "tau_s_ms": 5.0,
+   "w_syn_mv": 0.275,
+   "delay_ms": 1.8,
+   "dt_ms": 2.0,
+   "weight_scale": 0.5,
+   "adapt_mv": 0.6,
+   "tau_adapt_ms": 120.0,
+   "std_u": 0.15,
+   "std_tau_rec_ms": 480.0
+  },
+  "n_neurons": 166700,
+  "n_edges": 6242085,
+  "shuffle": null,
+  "threshold_z": 1.0,
+  "readout_cells": 2129,
+  "grid": [
+   24,
+   18
+  ],
+  "rate_max": 150.0,
+  "tonic_hz": 0.0,
+  "burst_hz": 1.5,
+  "autoplay": true,
+  "autoplay_amp": 0.8,
+  "autoplay_hz": 1.0,
+  "autoplay_whole": true,
+  "enc_gain": 6.0
+ }
+}

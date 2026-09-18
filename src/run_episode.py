@@ -55,6 +55,7 @@ def main():
     ap.add_argument("--autoplay-hz", type=float, default=1.0)
     ap.add_argument("--autoplay-whole", type=int, default=1)
     ap.add_argument("--teacher-gap", type=float, nargs=2, default=(0.9, 1.6), help="teacher: seconds between swipes on a panel (uniform range)")
+    ap.add_argument("--scripted", default=None, help="evaluation: scripted swipes 'L:15,R:15' (panel:seconds blocks); the decoder only logs would_swipe")
     ap.add_argument("--teacher-panels", default="LR", help="teacher: which panels the teacher swipes (e.g. L for a left-only probe)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--seed-l", type=int, default=1)
@@ -122,6 +123,13 @@ def main():
 
     X, Y = [], []
     next_teacher = {"L": rng.uniform(1.0, 1.6), "R": rng.uniform(1.3, 2.0)}
+    script = None
+    if args.scripted:
+        script, t_acc = [], 0.0
+        for blk in args.scripted.split(","):
+            pnl, secs = blk.split(":")
+            script.append((t_acc, t_acc + float(secs), pnl)); t_acc += float(secs)
+        next_script = 1.0
     n_swipes = {"L": 0, "R": 0}
     t0 = time.time()
     counts_ro = np.zeros(readout_cells.size, np.int32)
@@ -146,6 +154,12 @@ def main():
 
         rec_pops = {p: rec.pop_counts[p][-1] for p in pops}
         swipe = dec.step(t, counts_ro, rec_pops)
+        would = swipe
+        if script is not None:
+            swipe = None
+            panel = next((p for a, b, p in script if a <= t < b), None)
+            if panel is not None and t >= next_script:
+                swipe = panel; next_script = t + rng.uniform(*args.teacher_gap)
         y = np.zeros(2, np.float32)
         if args.mode == "teacher":
             for i, p in enumerate("LR"):
@@ -160,7 +174,7 @@ def main():
             feedR.swipe(); n_swipes["R"] += 1
 
         ev.write(json.dumps(dict(
-            step=k, t=round(t, 4), swipe=swipe,
+            step=k, t=round(t, 4), swipe=swipe, would_swipe=would if script is not None else None,
             readout={"L": round(dec.last_value["L"], 3), "R": round(dec.last_value["R"], 3)},
             spikes=int(total),
             pops={p: int(rec_pops[p]) for p in ("eye_L", "eye_R", "dn_L", "dn_R", "leg_L", "leg_R", "vpn_L", "vpn_R")},
