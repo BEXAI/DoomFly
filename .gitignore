@@ -20,3 +20,10 @@ out/summary_smoke*
 out/summary_std_*
 out/calib*/
 out/*.npz
+out/summary_side_*
+out/summary_ap_*
+out/summary_burst*
+out/summary_lat_*
+out/*.out
+out/analyze.py
+out/side_eval.py
