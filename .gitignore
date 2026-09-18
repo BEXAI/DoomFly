@@ -15,3 +15,8 @@ __pycache__/
 .env
 out/fixture_*
 out/*.log
+out/summary_probe_*
+out/summary_smoke*
+out/summary_std_*
+out/calib*/
+out/*.npz
