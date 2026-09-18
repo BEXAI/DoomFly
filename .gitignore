@@ -13,3 +13,4 @@ out/*.jsonl
 __pycache__/
 .venv/
 .env
+out/fixture_*
