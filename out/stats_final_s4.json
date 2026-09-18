@@ -1,0 +1,9 @@
+{
+ "total swipes": 29,
+ "swipes L / R": "9 / 20",
+ "posts consumed L / R": "11 / 32",
+ "total spikes": "5,982,209",
+ "simulated time": "50 s",
+ "mean rate": "0.72 Hz / neuron",
+ "DN rate at swipe": "9.2 Hz (vs 2.1 Hz 1 s earlier)"
+}
