@@ -215,6 +215,12 @@ class Feed:
         height: int = PANEL_H,
         scale: float = 0.25,
         theme: str = "dark",
+            autoplay: bool = True,
+        autoplay_amp: float = 0.8,
+        autoplay_hz: float = 1.0,
+        novel_amp: float = 0.6,
+        novel_hz: float = 1.0,
+        autoplay_whole: bool = True,
     ) -> None:
         if panel not in PALETTES:
             raise ValueError("panel must be 'L' or 'R'")
@@ -250,6 +256,17 @@ class Feed:
         self._novel_last = int(self._novel_rs.randint(3, 7))
         self._novel_set = {self._novel_last}
         self._novel_seen: set = set()
+        # "Autoplay": visible image blocks (and novel cards) pulse slowly in luminance,
+        # like autoplaying video in a real feed. This is the ambient stimulus that lets
+        # a motion-driven observer keep scrolling; it is a property of the content, not
+        # of the brain. Disable with autoplay=False for a fully static feed.
+        self.autoplay = bool(autoplay)
+        self.autoplay_amp = float(autoplay_amp)
+        self.autoplay_hz = float(autoplay_hz)
+        self.novel_amp = float(novel_amp)
+        self.novel_hz = float(novel_hz)
+        self.autoplay_whole = bool(autoplay_whole)  # cut the whole card, not just its image block
+        self._base_frame = None
 
         # Caches.
         self._cards: "OrderedDict[int, np.ndarray]" = OrderedDict()
@@ -308,6 +325,9 @@ class Feed:
         self.velocity = (new_off - self.offset) / dt if dt > 0 else 0.0
         if new_off != self.offset:
             self._dirty = True
+            self._base_frame = None
+        if self.autoplay and dt > 0:
+            self._dirty = True
         self.offset = new_off
         self._update_counters()
 
@@ -318,6 +338,11 @@ class Feed:
         """Return the current frame as uint8 BGR ``(H*scale, W*scale, 3)``."""
         if self._frame is not None and not self._dirty:
             return self._frame
+        if self._base_frame is not None:
+            frame = self._apply_autoplay(self._base_frame)
+            self._frame = frame
+            self._dirty = False
+            return frame
         frame = np.empty((self.out_h, self.out_w, 3), np.uint8)
         frame[:] = self.theme["bg"]
         off = self.offset
@@ -338,8 +363,52 @@ class Feed:
             i += 1
         ab = self._appbar
         frame[: ab.shape[0]] = ab
+        self._base_frame = frame
+        frame = self._apply_autoplay(frame)
         self._frame = frame
         self._dirty = False
+        return frame
+
+    def _apply_autoplay(self, base: np.ndarray) -> np.ndarray:
+        """'Autoplay': every visible image block (and novel card) behaves like a muted
+        autoplaying clip with hard cuts: its brightness jumps to a new random level
+        every `period` seconds (period and phase fixed per card). Between cuts the
+        frame is static, so an adapting observer only sees the cuts. Returns a new frame."""
+        if not self.autoplay:
+            return base
+        frame = base.copy()
+        off = self.offset
+        bottom_edge = off + self.height
+        i = bisect_right(self._bottoms, off)
+        ab_h = self._appbar.shape[0]
+        while i < len(self._tops) and self._tops[i] < bottom_edge:
+            spec = self._spec(i)
+            top = self._tops[i]
+            h_i = (self.seed * 1_000_003 + i * 7919) & 0x7FFFFFFF
+            if spec["kind"] == "novel":
+                y0, y1 = top, top + spec["h"]
+                period, amp = self.novel_hz and 1.0 / self.novel_hz, self.novel_amp
+            elif spec.get("image") is not None:
+                if self.autoplay_whole:
+                    y0, y1 = top, top + spec["h"]
+                else:
+                    y0, y1 = top + spec["image"]["y0"], top + spec["image"]["y1"]
+                period = (1.0 / self.autoplay_hz) * (0.7 + 0.6 * ((h_i >> 8) % 1000) / 1000.0)
+                amp = self.autoplay_amp
+            else:
+                i += 1
+                continue
+            phase = period * (((h_i >> 4) % 1000) / 1000.0)
+            cut = int((self.time_s + phase) // period)
+            u = (((h_i ^ (cut * 2654435761)) * 2246822519) & 0xFFFFFFFF) / 0xFFFFFFFF
+            m = 1.0 + amp * (2.0 * u - 1.0)
+            ya = max(ab_h, int(round((y0 - off) * self.scale)))
+            yb = min(self.out_h, int(round((y1 - off) * self.scale)))
+            if yb > ya:
+                pad = int(round((CARD_PAD + 20) * self.scale))
+                region = frame[ya:yb, pad:self.out_w - pad]
+                cv2.convertScaleAbs(region, dst=region, alpha=m, beta=0)
+            i += 1
         return frame
 
     def luminance_grid(self, rows: int, cols: int) -> np.ndarray:
@@ -638,9 +707,9 @@ class Feed:
 # --------------------------------------------------------------------------- #
 # Module API
 # --------------------------------------------------------------------------- #
-def make_pair(seed_l: int = 1, seed_r: int = 2, scale: float = 0.25) -> Tuple[Feed, Feed]:
+def make_pair(seed_l: int = 1, seed_r: int = 2, scale: float = 0.25, **kw) -> Tuple[Feed, Feed]:
     """Create the (left, right) feed pair with independent palettes."""
-    return Feed("L", seed_l, scale=scale), Feed("R", seed_r, scale=scale)
+    return Feed("L", seed_l, scale=scale, **kw), Feed("R", seed_r, scale=scale, **kw)
 
 
 def _demo() -> None:

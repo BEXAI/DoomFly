@@ -11,9 +11,9 @@ Two modes, both operating only on spikes of real MaleCNS output neurons
 
   burst   No fit. A swipe is triggered when the z-scored fast trace of the whole
           descending-neuron population crosses `threshold` (a DN burst); the panel is the
-          side whose visual projection neurons (VPN L vs R) carried more of the recent
-          activity, i.e. the eye that saw the change (the wiring's ipsilateral early
-          response). Uses only real-neuron spike counts.
+          side whose optic lobe (intrinsic cells downstream of the driven lamina cells,
+          per cell) carried more of the recent activity, i.e. the eye that saw the
+          change. Uses only real-neuron spike counts; nothing is fitted.
 
   ridge   A fitted *linear* readout (ridge regression) from two exponential traces
           (fast ~80 ms, slow ~800 ms) of every output cell's rate to a teacher signal
@@ -43,6 +43,10 @@ class DecoderConfig:
     threshold_z: float = 2.5
     refractory_s: float = 0.40
     warmup_s: float = 1.0           # no swipes before this
+    burst_hz: float = 0.0           # burst mode: absolute DN population-rate threshold (Hz/cell); 0 = use z
+    n_dn: int = 1314
+    n_ol: dict = None               # per-side optic-lobe cell counts for side evidence
+    global_refractory_s: float = 0.30  # minimum gap between any two swipes
 
 
 class Features:
@@ -106,6 +110,12 @@ class Decoder:
         self.a_fast = float(np.exp(-cfg.control_dt_s / cfg.tau_fast_s))
         self.dn_fast = 0.0
         self.vpn_fast = {"L": 0.0, "R": 0.0}
+        # per-side normalisation of the side evidence (removes the structural L/R bias of
+        # the reconstruction: the right optic lobe carries ~10% more synapses)
+        self.z_side = {"L": RunningZ(cfg.tau_baseline_s, cfg.control_dt_s),
+                       "R": RunningZ(cfg.tau_baseline_s, cfg.control_dt_s)}
+        if self.cfg.n_ol is None:
+            self.cfg.n_ol = {"L": 1, "R": 1}
         self.last_side_evidence = 0.0
 
     def step(self, t: float, counts: np.ndarray, aux: Optional[Dict[str, int]] = None) -> Optional[str]:
@@ -143,18 +153,29 @@ class Decoder:
         dn = float(aux.get("dn_L", 0) + aux.get("dn_R", 0))
         self.dn_fast = a * self.dn_fast + (1 - a) * dn
         for p in "LR":
-            self.vpn_fast[p] = a * self.vpn_fast[p] + (1 - a) * float(aux.get("vpn_" + p, 0))
-        z = self.z_dn.update(self.dn_fast)
-        ev = self.vpn_fast["L"] - self.vpn_fast["R"]
+            # side evidence: this side's optic-lobe activity *downstream* of the driven
+            # lamina cells (ol minus L1/L2), per cell; falls back to VPNs if absent
+            if "ol_" + p in aux:
+                x = (float(aux["ol_" + p]) - float(aux.get("eye_" + p, 0))) / max(1.0, float(self.cfg.n_ol.get(p, 1)))
+            else:
+                x = float(aux.get("vpn_" + p, 0))
+            self.vpn_fast[p] = a * self.vpn_fast[p] + (1 - a) * x
+        if self.cfg.burst_hz > 0:
+            # DN population rate in Hz per cell (fast trace of spikes per control step)
+            z = self.dn_fast / (self.cfg.n_dn * self.cfg.control_dt_s) / self.cfg.burst_hz * self.cfg.threshold_z
+        else:
+            z = self.z_dn.update(self.dn_fast)
+        zs = {p: self.z_side[p].update(self.vpn_fast[p]) for p in "LR"}
+        ev = zs["L"] - zs["R"]
         self.last_side_evidence = ev
-        # expose per-panel values for logging: DN z signed by side evidence
+        # expose per-panel values for logging: burst signal assigned to the evidenced side
         self.last_value = {"L": z if ev >= 0 else 0.0, "R": z if ev < 0 else 0.0}
         if t < self.cfg.warmup_s or z <= self.cfg.threshold_z:
             return None
         if abs(ev) < 1e-6:
             return None
         p = "L" if ev > 0 else "R"
-        if t - self.last_swipe[p] < self.cfg.refractory_s:
+        if t - self.last_swipe[p] < self.cfg.refractory_s or t - max(self.last_swipe.values()) < self.cfg.global_refractory_s:
             return None
         self.last_swipe[p] = t
         return p

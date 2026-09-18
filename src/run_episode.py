@@ -37,18 +37,23 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--duration", type=float, default=50.0, help="seconds of video/brain time")
-    ap.add_argument("--mode", choices=["teacher", "ridge", "direct", "burst"], default="ridge")
+    ap.add_argument("--mode", choices=["teacher", "ridge", "direct", "burst"], default="burst")
     ap.add_argument("--readout", default=os.path.join(ROOT, "out", "readout.npz"))
-    ap.add_argument("--weight-scale", type=float, default=0.15)
+    ap.add_argument("--weight-scale", type=float, default=0.5)
     ap.add_argument("--adapt-mv", type=float, default=0.6)
-    ap.add_argument("--std-u", type=float, default=0.0, help="short-term depression U per spike (flybrain: 0.08)")
+    ap.add_argument("--std-u", type=float, default=0.15, help="short-term depression U per spike (flybrain: 0.08)")
     ap.add_argument("--std-tau", type=float, default=480.0, help="STD recovery time constant (ms)")
     ap.add_argument("--rate-max", type=float, default=150.0)
     ap.add_argument("--enc-gain", type=float, default=6.0)
     ap.add_argument("--tonic-hz", type=float, default=0.0, help="spontaneous baseline rate of every driven lamina cell (steady-light activity)")
     ap.add_argument("--grid", type=int, nargs=2, default=(24, 18))
-    ap.add_argument("--threshold", type=float, default=None, help="decoder z threshold (default: from readout file or 2.5)")
+    ap.add_argument("--threshold", type=float, default=1.0, help="decoder z threshold (default: from readout file or 2.5)")
     ap.add_argument("--refractory", type=float, default=0.4)
+    ap.add_argument("--burst-hz", type=float, default=1.5, help="burst mode: swipe when DN population rate exceeds this (Hz/cell); 0 = z-score trigger")
+    ap.add_argument("--autoplay", type=int, default=1, help="feeds autoplay cuts on (1) / static feeds (0)")
+    ap.add_argument("--autoplay-amp", type=float, default=0.8)
+    ap.add_argument("--autoplay-hz", type=float, default=1.0)
+    ap.add_argument("--autoplay-whole", type=int, default=1)
     ap.add_argument("--teacher-gap", type=float, nargs=2, default=(0.9, 1.6), help="teacher: seconds between swipes on a panel (uniform range)")
     ap.add_argument("--teacher-panels", default="LR", help="teacher: which panels the teacher swipes (e.g. L for a left-only probe)")
     ap.add_argument("--seed", type=int, default=0)
@@ -91,12 +96,13 @@ def main():
     print(f"readout cells: {readout_cells.size} (DN+MN); front-leg pools L={pool_masks['L'].sum()} R={pool_masks['R'].sum()}")
 
     # feeds + eyes
-    feedL, feedR = make_pair(args.seed_l, args.seed_r, scale=0.25)
+    feedL, feedR = make_pair(args.seed_l, args.seed_r, scale=0.25, autoplay=bool(args.autoplay), autoplay_amp=args.autoplay_amp, autoplay_hz=args.autoplay_hz, autoplay_whole=bool(args.autoplay_whole))
     encL, encR = make_encoders(grid=tuple(args.grid), rate_max_hz=args.rate_max, gain=args.enc_gain, tonic_hz=args.tonic_hz)
     print(f"eye L drives {encL.idx_L1.size + encL.idx_L2.size} lamina cells, eye R {encR.idx_L1.size + encR.idx_L2.size}")
 
     # decoder
-    dcfg = DecoderConfig(control_dt_s=control_dt, refractory_s=args.refractory)
+    dcfg = DecoderConfig(control_dt_s=control_dt, refractory_s=args.refractory, burst_hz=args.burst_hz, n_dn=int(conn.idx("dn_all").size),
+                         n_ol={"L": int(pops["ol_L"].size - pops["eye_L"].size), "R": int(pops["ol_R"].size - pops["eye_R"].size)})
     readout = None
     if args.mode == "ridge":
         readout = load_readout(args.readout)
@@ -111,7 +117,7 @@ def main():
     meta = dict(meta=dict(seed_l=args.seed_l, seed_r=args.seed_r, mode=args.mode, duration=args.duration,
                           control_dt=control_dt, substeps=substeps, lif=cfg.to_json(), n_neurons=conn.n,
                           n_edges=int(conn.W.nnz), shuffle=args.shuffle, threshold_z=dcfg.threshold_z,
-                          readout_cells=int(readout_cells.size), grid=list(args.grid), rate_max=args.rate_max, tonic_hz=args.tonic_hz))
+                          readout_cells=int(readout_cells.size), grid=list(args.grid), rate_max=args.rate_max, tonic_hz=args.tonic_hz, burst_hz=args.burst_hz, autoplay=bool(args.autoplay), autoplay_amp=args.autoplay_amp, autoplay_hz=args.autoplay_hz, autoplay_whole=bool(args.autoplay_whole), enc_gain=args.enc_gain))
     ev.write(json.dumps(meta) + "\n")
 
     X, Y = [], []
