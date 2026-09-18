@@ -1,0 +1,15 @@
+# data (multi-GB, downloaded by src/download.py)
+data/raw/
+data/graph/
+# reference repos (read-only clones)
+ref/
+# outputs
+out/frames/
+out/*.npz
+out/*.mp4
+out/*.png
+out/*.jsonl
+*.pyc
+__pycache__/
+.venv/
+.env
