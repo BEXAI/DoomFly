@@ -43,6 +43,7 @@ class DecoderConfig:
     threshold_z: float = 2.5
     refractory_s: float = 0.40
     warmup_s: float = 1.0           # no swipes before this
+    tau_side_s: float = 0.80        # burst mode: trace for the side evidence (remembers the onset)
     burst_hz: float = 0.0           # burst mode: absolute DN population-rate threshold (Hz/cell); 0 = use z
     n_dn: int = 1314
     n_ol: dict = None               # per-side optic-lobe cell counts for side evidence
@@ -108,6 +109,7 @@ class Decoder:
         # burst mode state: fast traces of DN population and of VPN L / R
         self.z_dn = RunningZ(cfg.tau_baseline_s, cfg.control_dt_s)
         self.a_fast = float(np.exp(-cfg.control_dt_s / cfg.tau_fast_s))
+        self.a_side = float(np.exp(-cfg.control_dt_s / cfg.tau_side_s))
         self.dn_fast = 0.0
         self.vpn_fast = {"L": 0.0, "R": 0.0}
         # per-side normalisation of the side evidence (removes the structural L/R bias of
@@ -163,7 +165,7 @@ class Decoder:
                 x = (float(aux["ol_" + p]) - float(aux.get("eye_" + p, 0))) / max(1.0, float(self.cfg.n_ol.get(p, 1)))
             else:
                 x = float(aux.get("vpn_" + p, 0))
-            self.vpn_fast[p] = a * self.vpn_fast[p] + (1 - a) * x
+            self.vpn_fast[p] = self.a_side * self.vpn_fast[p] + (1 - self.a_side) * x
         if self.cfg.burst_hz > 0:
             # DN population rate in Hz per cell (fast trace of spikes per control step)
             z = self.dn_fast / (self.cfg.n_dn * self.cfg.control_dt_s) / self.cfg.burst_hz * self.cfg.threshold_z

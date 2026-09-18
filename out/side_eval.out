@@ -1,0 +1,2 @@
+side_real: decoder side correct  L-block 6/13  R-block 12/13  overall 18/26 = 0.69
+side_shuf: decoder side correct  L-block 0/19  R-block 13/13  overall 13/32 = 0.41

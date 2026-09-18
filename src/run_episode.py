@@ -49,6 +49,7 @@ def main():
     ap.add_argument("--grid", type=int, nargs=2, default=(24, 18))
     ap.add_argument("--threshold", type=float, default=1.0, help="decoder z threshold (default: from readout file or 2.5)")
     ap.add_argument("--refractory", type=float, default=0.4)
+    ap.add_argument("--tau-side", type=float, default=0.80, help="burst mode: side-evidence trace time constant (s)")
     ap.add_argument("--burst-hz", type=float, default=1.5, help="burst mode: swipe when DN population rate exceeds this (Hz/cell); 0 = z-score trigger")
     ap.add_argument("--autoplay", type=int, default=1, help="feeds autoplay cuts on (1) / static feeds (0)")
     ap.add_argument("--autoplay-amp", type=float, default=0.8)
@@ -105,7 +106,7 @@ def main():
     print(f"eye L drives {encL.idx_L1.size + encL.idx_L2.size} lamina cells, eye R {encR.idx_L1.size + encR.idx_L2.size}")
 
     # decoder
-    dcfg = DecoderConfig(control_dt_s=control_dt, refractory_s=args.refractory, burst_hz=args.burst_hz, n_dn=int(conn.idx("dn_all").size),
+    dcfg = DecoderConfig(control_dt_s=control_dt, refractory_s=args.refractory, burst_hz=args.burst_hz, tau_side_s=args.tau_side, n_dn=int(conn.idx("dn_all").size),
                          n_ol={"L": int(pops["med_L"].size), "R": int(pops["med_R"].size)})
     readout = None
     if args.mode == "ridge":
