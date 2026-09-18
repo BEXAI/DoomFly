@@ -49,6 +49,7 @@ def main():
     ap.add_argument("--threshold", type=float, default=None, help="decoder z threshold (default: from readout file or 2.5)")
     ap.add_argument("--refractory", type=float, default=0.4)
     ap.add_argument("--teacher-gap", type=float, nargs=2, default=(0.9, 1.6), help="teacher: seconds between swipes on a panel (uniform range)")
+    ap.add_argument("--teacher-panels", default="LR", help="teacher: which panels the teacher swipes (e.g. L for a left-only probe)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--seed-l", type=int, default=1)
     ap.add_argument("--seed-r", type=int, default=2)
@@ -140,7 +141,7 @@ def main():
         y = np.zeros(2, np.float32)
         if args.mode == "teacher":
             for i, p in enumerate("LR"):
-                if t >= next_teacher[p]:
+                if p in args.teacher_panels and t >= next_teacher[p]:
                     swipe = p if swipe is None else swipe
                     y[i] = 1.0
                     next_teacher[p] = t + rng.uniform(*args.teacher_gap)
