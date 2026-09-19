@@ -24,8 +24,8 @@ Usage::
     python3 src/render_arena.py --fixture [--fixture-cond dopamine --fixture-duration 60] --preview
 
 ``--fixture`` writes a schema-exact synthetic log (correlated random walk that visits the phone)
-to ``out/arena_fixture.jsonl`` (plus ``out/arena_fixture_summary.json``) and renders it; it never
-touches real logs.  ``--preview`` renders 540x960 and every other frame.
+to ``arena_fixture.jsonl`` (plus ``arena_fixture_summary.json``) next to ``--out`` (default ``out/``)
+and renders it; it never touches real logs.  ``--preview`` renders 540x960 and every other frame.
 
 Conventions: world x right / y up in mm, room centred at 0; heading theta in radians, 0 = +x,
 CCW positive; the sprite's head-up direction maps to the heading.  Screen y is down, so a world
@@ -53,13 +53,13 @@ try:
     from src.render import (  # noqa: E402
         ATTRIBUTION, COL_DIM, COL_GREY, COL_L, COL_R, COL_WHITE, FLY_IMAGE_BODY_LEN, FLY_SPRITE_JSON,
         FLY_SPRITE_PNG, PIP_SIZE, BrainPiP, Device, Fly, TextRenderer, _pt, card_alpha, clamp, ease_in_out,
-        ease_out, fill_panel, load_events, load_spikes, premul_blit, rounded_mask)
+        ease_out, fill_panel, load_events, load_spikes, parse_stills, premul_blit, rounded_mask)
 except ImportError:  # running from inside src/
     from feeds import make_pair  # type: ignore  # noqa: E402
     from render import (  # type: ignore  # noqa: E402
         ATTRIBUTION, COL_DIM, COL_GREY, COL_L, COL_R, COL_WHITE, FLY_IMAGE_BODY_LEN, FLY_SPRITE_JSON,
         FLY_SPRITE_PNG, PIP_SIZE, BrainPiP, Device, Fly, TextRenderer, _pt, card_alpha, clamp, ease_in_out,
-        ease_out, fill_panel, load_events, load_spikes, premul_blit, rounded_mask)
+        ease_out, fill_panel, load_events, load_spikes, parse_stills, premul_blit, rounded_mask)
 
 # --------------------------------------------------------------------------- #
 # Design constants (design px at 1080 x 1920, scaled by k)
@@ -82,6 +82,7 @@ LEG_REACH_MM = 22.0
 LEG_ANGLE_RAD = math.radians(35.0)
 TRAIL_S = 15.0
 TRAIL_BUCKETS = 30
+VISIT_DEBOUNCE_S = 0.5      # analyze_arena.DEBOUNCE_S: off-phone gaps shorter than this do not end a visit
 SWIPE_ANIM_S = 0.42
 DEVICE_K_RATIO = 0.41       # bevel / hinge / corner radius of the small phone relative to render.py's
 
@@ -556,6 +557,7 @@ class ArenaRenderer:
         self.has_compare = self._summary_values() is not None
         self.t_compare = (D - 12.0 * f, D - 4.0 * f)
         self.t_attrib = (D - 4.0 * f, D)
+        self.fade = max(f, 0.3)      # card fades shrink with the cards (never below 0.3x), as in render.py
 
         # ---- dynamic state ----
         self.ev_ptr = 0
@@ -577,6 +579,9 @@ class ArenaRenderer:
         self.trail: Deque[Tuple[float, float, float]] = deque()
         self.dist_series: List[float] = []
         self.dist_t: List[float] = []
+        self.on_series: List[bool] = []            # on_phone per step, for the plot's on-phone marks
+        self._off_steps: Optional[int] = None      # off-phone steps since the last on-phone step (None before any visit)
+        self.visit_gap_steps = max(1, int(round(VISIT_DEBOUNCE_S / CTRL_DT)))
         self.dist_max = max(1.0, float(max((float(e.get("dist_mm", 0.0)) for e in events), default=200.0)))
         self.dist_max = max(self.dist_max, 120.0)
 
@@ -622,14 +627,20 @@ class ArenaRenderer:
             self.pose = {"x": float(pose.get("x", 0.0)), "y": float(pose.get("y", 0.0)),
                          "th": float(pose.get("th", 0.0)), "v": float(pose.get("v", 0.0))}
             onp = bool(e.get("on_phone", on_phone(self.pose["x"], self.pose["y"])))
-            if onp and not self.on_phone:
-                self.visits += 1
             if onp:
+                # a visit as analyze_arena.visits_debounced counts it: an on-phone run that starts
+                # after an off-phone gap of >= 0.5 s (shorter gaps continue the previous visit)
+                if self._off_steps is None or self._off_steps >= self.visit_gap_steps:
+                    self.visits += 1
+                self._off_steps = 0
                 self.time_on += CTRL_DT
+            elif self._off_steps is not None:
+                self._off_steps += 1
             self.on_phone = onp
             self.dist_mm = float(e.get("dist_mm", dist_to_phone(self.pose["x"], self.pose["y"])))
             self.dist_series.append(self.dist_mm)
             self.dist_t.append(te)
+            self.on_series.append(onp)
             reach = e.get("reach") or {}
             sw = e.get("swipe")
             if sw in ("L", "R"):
@@ -749,7 +760,7 @@ class ArenaRenderer:
             T.draw(frame, ln, HUD_X0, y, 20, COL_GREY)
             y += 26
         # time on phone
-        tt = max(self.last_t, 1e-6)
+        tt = self.last_t + CTRL_DT          # elapsed brain time incl. the current step (analysis: T = last t + dt)
         pct = 100.0 * self.time_on / tt
         T.draw(frame, "TIME ON PHONE", HUD_X0, 1240, 24, COL_GREY)
         colr = COL_ACCENT if self.on_phone else COL_WHITE
@@ -810,12 +821,13 @@ class ArenaRenderer:
         if n >= 2:
             vals = np.asarray(self.dist_series, np.float32)
             ts = np.asarray(self.dist_t, np.float32)
+            ons = np.asarray(self.on_series, bool)
             xs = px0 + ts / max(self.duration, 1e-6) * (px1 - px0)
             ys = py1 - np.clip(vals / self.dist_max, 0, 1) * (py1 - py0)
             # subsample to at most one point per pixel column
             if n > (px1 - px0):
                 idx = np.unique(np.round(np.linspace(0, n - 1, px1 - px0)).astype(int))
-                xs, ys, vals = xs[idx], ys[idx], vals[idx]
+                xs, ys, vals, ons = xs[idx], ys[idx], vals[idx], ons[idx]
             pts = np.int32(np.round(np.stack([xs, ys], axis=1))).reshape(-1, 1, 2)
             # on-phone band: fill under the curve where distance == 0 reads as time on the phone
             roi = frame[y0:y1, x0:x1]
@@ -824,8 +836,9 @@ class ArenaRenderer:
             cv2.fillPoly(over, [poly - np.array([x0, y0], np.int32)], (70, 60, 44), cv2.LINE_AA)
             cv2.addWeighted(roi, 0.7, over, 0.3, 0, dst=roi)
             cv2.polylines(frame, [pts], False, (210, 190, 140), max(1, int(round(2 * k))), cv2.LINE_AA)
-            # highlight on-phone stretches along the baseline
-            onp = vals <= 0.5
+            # highlight on-phone stretches along the baseline (the logged flag: dist_mm is the distance
+            # to the phone centre in real logs, so it never reaches 0 on the phone)
+            onp = ons
             if onp.any():
                 bl = np.zeros(pts.shape[0], bool)
                 bl[:] = onp
@@ -940,15 +953,16 @@ class ArenaRenderer:
             T.draw(frame, f"{100 * axis_max * frac_t:.0f} %", xx, ay + 6, 18, COL_DIM, align="center", alpha=alpha)
 
     def draw_cards(self, frame: np.ndarray, t: float) -> None:
-        a = card_alpha(t, *self.t_title)
+        fi, fo = 0.45 * self.fade, 0.6 * self.fade
+        a = card_alpha(t, *self.t_title, fade_in=fi, fade_out=fo)
         if a > 0:
             self.draw_card(frame, [(TITLE, 68, COL_WHITE, True), ("", 18, COL_WHITE, False), (SUBTITLE, 34, COL_GREY, False)],
                            a, y_center=1500, max_width=980)
         if self.has_compare:
-            a = card_alpha(t, *self.t_compare)
+            a = card_alpha(t, *self.t_compare, fade_in=fi, fade_out=fo)
             if a > 0:
                 self.draw_compare_card(frame, a)
-        a = card_alpha(t, self.t_attrib[0], self.t_attrib[1] + 1.0, fade_out=0.0)
+        a = card_alpha(t, self.t_attrib[0], self.t_attrib[1] + 1.0, fade_in=fi, fade_out=0.0)
         if a > 0:
             self.draw_card(frame, [("CREDITS", 30, COL_GREY, True), ("", 12, COL_WHITE, False), (ATTRIBUTION, 30, COL_WHITE, False)],
                            a, y_center=1000, max_width=960, pad=40)
@@ -980,15 +994,28 @@ class ArenaRenderer:
         self.feed_l.step(1.0 / FPS)
         self.feed_r.step(1.0 / FPS)
 
+    def iter_frames(self, stills=frozenset()):
+        """Advance feeds / events / PiP exactly as the video loop does and yield (idx, frame) for every
+        rendered frame (skipped preview frames and, with --no-video, all non-still frames only step the state)."""
+        no_video = bool(getattr(self.args, "no_video", False))
+        for idx in range(self.n_frames):
+            self.step_feeds()
+            if idx == self.n_frames - 1:
+                # the last control step ends inside the final frame: apply it (events with t < n_frames / FPS)
+                self.apply_events(self.n_frames / FPS - 1e-6)
+            if (idx % self.frame_step != 0 or no_video) and idx not in stills:
+                self.apply_events(idx / FPS)
+                self.pip.decay()
+                continue
+            yield idx, self.render_frame(idx)
+
     def run(self) -> None:
         import imageio.v2 as imageio
         args = self.args
         out_dir = os.path.dirname(os.path.abspath(args.out)) or "."
         os.makedirs(out_dir, exist_ok=True)
         out_fps = FPS / self.frame_step
-        stills = set()
-        if args.stills:
-            stills = {int(round(float(s) * FPS)) for s in args.stills.split(",") if s.strip()}
+        stills = parse_stills(args.stills, self.n_frames, self.duration)
         writer = None if args.no_video else imageio.get_writer(
             args.out, fps=out_fps, codec="libx264", quality=8, pixelformat="yuv420p", macro_block_size=1,
             ffmpeg_params=["-preset", args.preset])
@@ -998,17 +1025,7 @@ class ArenaRenderer:
         print(f"rendering {self.n_frames} frames ({self.duration:.1f} s) at {self.W}x{self.H}, condition={self.cond}, "
               f"writing every {self.frame_step} frame(s) to {args.out}", flush=True)
         try:
-            for idx in range(self.n_frames):
-                self.step_feeds()
-                if idx % self.frame_step != 0 and idx not in stills:
-                    self.apply_events(idx / FPS)
-                    self.pip.decay()
-                    continue
-                if args.no_video and idx not in stills:
-                    self.apply_events(idx / FPS)
-                    self.pip.decay()
-                    continue
-                frame = self.render_frame(idx)
+            for idx, frame in self.iter_frames(stills):
                 n_rendered += 1
                 if idx in stills:
                     name = f"arena_still_{idx / FPS:g}s.png"
@@ -1063,15 +1080,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ev_path = args.events
     summary_path = args.summary
     if args.fixture:
-        ev_path = os.path.join(out_dir, "arena_fixture.jsonl")
-        fx_summary = os.path.join(out_dir, "arena_fixture_summary.json")
+        fx_dir = os.path.dirname(os.path.abspath(args.out)) if args.out else out_dir
+        os.makedirs(fx_dir, exist_ok=True)
+        ev_path = os.path.join(fx_dir, "arena_fixture.jsonl")
+        fx_summary = os.path.join(fx_dir, "arena_fixture_summary.json")
         print(f"generating fixture {ev_path} ({args.fixture_cond}, {args.fixture_duration:.0f} s)")
         make_fixture(ev_path, cond=args.fixture_cond, seed=args.fixture_seed, duration=args.fixture_duration,
                      summary_path=fx_summary)
         if not (summary_path and os.path.exists(summary_path)):
             summary_path = fx_summary
         if args.out is None:
-            args.out = os.path.join(out_dir, "arena_fixture.mp4")
+            args.out = os.path.join(fx_dir, "arena_fixture.mp4")
     if not ev_path or not os.path.exists(ev_path):
         print(f"missing events log {ev_path!r} (pass --events or --fixture)", file=sys.stderr)
         return 2
