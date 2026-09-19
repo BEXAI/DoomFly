@@ -1,0 +1,141 @@
+{
+ "source": "assets/duo_reference.jpg",
+ "source_size": [
+  1408,
+  1408
+ ],
+ "alpha_convention": "premultiplied-over-black: out = rgb + (1 - alpha) * background",
+ "coordinates": "continuous pixel-corner coordinates of the sprite (subtract 0.5 for OpenCV pixel centres)",
+ "crop_origin": [
+  200,
+  174
+ ],
+ "sprite_size": [
+  1015,
+  1028
+ ],
+ "device_bbox": [
+  8,
+  8,
+  1007,
+  1020
+ ],
+ "hinge_line": [
+  [
+   509.0,
+   93.33
+  ],
+  [
+   509.0,
+   933.4
+  ]
+ ],
+ "panel_mm": [
+  79.0,
+  111.0
+ ],
+ "panel_aspect": 0.7117,
+ "screen_corner_radius_px": 54.0,
+ "screens": {
+  "L": {
+   "quad": [
+    [
+     52.12,
+     29.2
+    ],
+    [
+     498.0,
+     93.33
+    ],
+    [
+     498.0,
+     933.4
+    ],
+    [
+     52.27,
+     995.87
+    ]
+   ],
+   "quad_order": [
+    "top-left",
+    "top-right",
+    "bottom-right",
+    "bottom-left"
+   ],
+   "size_px_mean": [
+    450.3,
+    903.4
+   ],
+   "apparent_aspect": 0.4984,
+   "bezel_px": {
+    "top": 7.87,
+    "outer": 4.11,
+    "bottom_model": 7.86,
+    "scale_bottom_over_top": 1.0
+   },
+   "corner_radius_px": 56.8,
+   "fit": {
+    "outer_rms": 0.392,
+    "hinge_rms": 0.0,
+    "top_rms": 0.402,
+    "n_outer": 710,
+    "n_hinge": 576,
+    "n_top": 287,
+    "n_bottom_direct": 0
+   }
+  },
+  "R": {
+   "quad": [
+    [
+     512.12,
+     94.11
+    ],
+    [
+     962.97,
+     34.2
+    ],
+    [
+     962.97,
+     996.26
+    ],
+    [
+     512.02,
+     933.18
+    ]
+   ],
+   "quad_order": [
+    "top-left",
+    "top-right",
+    "bottom-right",
+    "bottom-left"
+   ],
+   "size_px_mean": [
+    455.1,
+    900.6
+   ],
+   "apparent_aspect": 0.5053,
+   "bezel_px": {
+    "top": 8.46,
+    "outer": 4.37,
+    "bottom_model": 8.47,
+    "scale_bottom_over_top": 1.0
+   },
+   "corner_radius_px": 51.2,
+   "fit": {
+    "outer_rms": 0.173,
+    "hinge_rms": 0.273,
+    "top_rms": 0.335,
+    "n_outer": 485,
+    "n_hinge": 525,
+    "n_top": 250,
+    "n_bottom_direct": 3
+   }
+  }
+ },
+ "bottom_edge_note": "bottom edges are the bottom chamfer line offset by the top bezel width (content is black there)",
+ "background_level_bgr": [
+  0.0,
+  0.0,
+  0.0
+ ]
+}

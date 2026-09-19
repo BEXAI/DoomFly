@@ -13,9 +13,37 @@ full-resolution pixels and rasterises at ``scale`` (default 0.25 -> 334 x 470)
 for speed.  Card bitmaps are generated lazily by index from the seed and kept
 in a small LRU cache, so a render is essentially a handful of array copies.
 
+Two feed modes share the same control API (``swipe`` / ``set_velocity`` /
+``step`` / ``render`` / ``luminance_grid`` / ``state``):
+
+``mode="cards"`` (default)
+    The card stack described above.  A swipe is an ease-out flick over
+    ``0.55 * height`` px; cards have random heights.
+
+``mode="reels"``
+    A full-screen vertical short-video feed (TikTok / Reels style).  Posts are
+    drawn from a pool of pre-generated clips (all ``*.mp4`` in ``clips_dir``,
+    sorted by name, decoded once, resized to ``clip_res`` portrait frames and
+    kept in a module-level cache shared by every Feed).  If the directory has
+    no clips, six procedural placeholder clips (5 s @ 24 fps: moving gradients
+    with drifting shapes, one high-contrast "novel" clip) are synthesised so
+    the code path always works; ``state["clips_synthetic"]`` says so.  Post
+    ``i`` is a deterministic shuffle of the pool per seed, every 6-10th post is
+    "novel" (the novel-flagged or highest-contrast clip), every post occupies
+    exactly one panel height and a swipe snaps (ease-out, 0.35 s) to the next
+    post boundary.  The visible clips play and loop with time; the frame shown
+    for post ``i`` is ``int((time_s + phase_i * duration) * fps) % n_frames``
+    with a per-post phase from the seed, so the rendered image is a pure
+    function of ``(seed, time_s, offset)`` and the video renderer replays it
+    exactly.  Over the clip sits a light original overlay (bottom gradient,
+    avatar disc, grey handle/caption bars, a column of three generic icon
+    shapes and a thin progress bar); the overlay is pre-rendered once as an
+    RGBA layer so a render is one resize plus one alpha blend.
+
 Typical use::
 
-    L, R = make_pair(seed_l=1, seed_r=2, scale=0.25)
+    L, R = make_pair(seed_l=1, seed_r=2, scale=0.25)            # cards
+    L, R = make_pair(seed_l=1, seed_r=2, scale=0.25, mode="reels", clips_dir="assets/clips")
     L.swipe()                    # flick the left panel
     for _ in range(60):
         L.step(1 / 60); R.step(1 / 60)
@@ -25,6 +53,7 @@ Typical use::
 """
 from __future__ import annotations
 
+import glob
 import math
 import os
 import time
@@ -55,6 +84,16 @@ NOVEL_MAX_GAP: int = 10
 SWIPE_FRACTION: float = 0.55
 SWIPE_DURATION_S: float = 0.35
 CACHE_CARDS: int = 96
+
+# Reels mode.
+MODES: Tuple[str, ...] = ("cards", "reels")
+CLIP_RES: Tuple[int, int] = (270, 480)      # (width, height) of cached clip frames
+CLIP_MAX_S: float = 20.0                     # decoded clips are truncated to this length
+SYNTH_N_CLIPS: int = 6
+SYNTH_FPS: int = 24
+SYNTH_DURATION_S: float = 5.0
+REEL_SNAP_EPS: float = 0.5                   # px tolerance for "offset is on a post boundary"
+REEL_MARGIN: int = 48                        # overlay side margin (design px)
 
 Color = Tuple[int, int, int]  # BGR
 
@@ -194,6 +233,210 @@ def _ease_out(x: float) -> float:
 
 
 # --------------------------------------------------------------------------- #
+# Clip pool for reels mode
+# --------------------------------------------------------------------------- #
+class Clip:
+    """One decoded short clip: ``frames`` is uint8 BGR ``(n_frames, h, w, 3)``."""
+
+    def __init__(self, name: str, frames: np.ndarray, fps: float, synthetic: bool, novel: bool = False) -> None:
+        self.name = name
+        self.frames = frames
+        self.fps = float(fps)
+        self.n_frames = int(frames.shape[0])
+        self.synthetic = bool(synthetic)
+        self.novel = bool(novel)
+        self.contrast = _clip_contrast(frames)
+
+    @property
+    def duration_s(self) -> float:
+        return self.n_frames / self.fps
+
+    @property
+    def info(self) -> Dict[str, object]:
+        return dict(name=self.name, fps=self.fps, n_frames=self.n_frames, synthetic=self.synthetic, novel=self.novel, contrast=round(self.contrast, 4))
+
+
+# Decoded clips shared across Feed instances, keyed by (absolute path or synthetic id, clip_res).
+_CLIP_CACHE: Dict[Tuple[str, Tuple[int, int]], Clip] = {}
+
+
+def _repo_root() -> str:
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _resolve_clips_dir(clips_dir: str) -> str:
+    """Relative ``clips_dir`` is taken relative to the cwd, then the repo root."""
+    if os.path.isabs(clips_dir) or os.path.isdir(clips_dir):
+        return os.path.abspath(clips_dir)
+    return os.path.join(_repo_root(), clips_dir)
+
+
+def _clip_contrast(frames: np.ndarray) -> float:
+    """Mean grey-level standard deviation (0..1) over up to 16 sampled frames."""
+    n = frames.shape[0]
+    idx = np.unique(np.linspace(0, n - 1, min(n, 16)).astype(int))
+    return float(np.mean([cv2.cvtColor(frames[i], cv2.COLOR_BGR2GRAY).std() for i in idx]) / 255.0)
+
+
+def _cover_resize(img: np.ndarray, size: Tuple[int, int]) -> np.ndarray:
+    """Resize ``img`` to fill ``size = (w, h)`` (cover: scale to fill, centre crop)."""
+    w, h = size
+    ih, iw = img.shape[:2]
+    if ih <= 0 or iw <= 0:
+        return np.zeros((h, w, 3), np.uint8)
+    k = max(w / iw, h / ih)
+    rw, rh = max(w, int(round(iw * k))), max(h, int(round(ih * k)))
+    interp = cv2.INTER_AREA if k < 1.0 else cv2.INTER_LINEAR
+    r = cv2.resize(img, (rw, rh), interpolation=interp)
+    x0, y0 = (rw - w) // 2, (rh - h) // 2
+    return np.ascontiguousarray(r[y0 : y0 + h, x0 : x0 + w])
+
+
+def _decode_clip(path: str, clip_res: Tuple[int, int]) -> Clip:
+    """Decode ``path`` fully (cv2, falling back to imageio) into a :class:`Clip`.
+
+    Clips longer than ``CLIP_MAX_S`` are truncated (they loop anyway).
+    """
+    frames: List[np.ndarray] = []
+    fps = 0.0
+    cap = cv2.VideoCapture(path)
+    if cap.isOpened():
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+        fps = fps if 1.0 <= fps <= 240.0 else 30.0
+        limit = max(1, int(round(CLIP_MAX_S * fps)))
+        while len(frames) < limit:
+            ok, f = cap.read()
+            if not ok or f is None:
+                break
+            frames.append(_cover_resize(f, clip_res))
+    cap.release()
+    if not frames:
+        import imageio.v2 as imageio
+
+        reader = imageio.get_reader(path)
+        try:
+            fps = float(reader.get_meta_data().get("fps", 30.0) or 30.0)
+            limit = max(1, int(round(CLIP_MAX_S * fps)))
+            for f in reader.iter_data():
+                frames.append(_cover_resize(np.ascontiguousarray(f[..., 2::-1]), clip_res))
+                if len(frames) >= limit:
+                    break
+        finally:
+            reader.close()
+    if not frames:
+        raise RuntimeError(f"could not decode any frame from {path}")
+    name = os.path.splitext(os.path.basename(path))[0]
+    return Clip(name, np.stack(frames).astype(np.uint8), fps, synthetic=False)
+
+
+# Placeholder palettes: (background c0, background c1, shape colours).  The last is the novel clip.
+_SYNTH_PALETTES: List[Tuple[Color, Color, List[Color]]] = [
+    (_hex("#0A1A3F"), _hex("#1FB8D8"), [_hex("#7FE3FF"), _hex("#FFFFFF"), _hex("#3B6CFF")]),
+    (_hex("#2A0A4A"), _hex("#E0409A"), [_hex("#FFB3E0"), _hex("#8B5CF6"), _hex("#FFFFFF")]),
+    (_hex("#062E2A"), _hex("#2BD48A"), [_hex("#B6FFDD"), _hex("#0F766E"), _hex("#FFFFFF")]),
+    (_hex("#3F1200"), _hex("#F97316"), [_hex("#FFD1A6"), _hex("#FFFFFF"), _hex("#B91C1C")]),
+    (_hex("#10122E"), _hex("#7C3AED"), [_hex("#C4B5FD"), _hex("#22D3EE"), _hex("#FFFFFF")]),
+    (_hex("#FFE600"), _hex("#FFE600"), [_hex("#111111"), _hex("#FF2D95"), _hex("#FFFFFF")]),
+]
+_NOVEL_LOOKS: List[Tuple[Color, Color]] = [(_hex("#FFE600"), _hex("#111111")), (_hex("#FF2D95"), _hex("#FFFFFF")), (_hex("#0B0D12"), _hex("#00E5FF"))]
+
+
+def _synth_clip(k: int, clip_res: Tuple[int, int]) -> Clip:
+    """Procedural placeholder clip ``k`` (5 s @ 24 fps, seamless loop); the last one is the novel clip."""
+    w, h = clip_res
+    n = int(round(SYNTH_DURATION_S * SYNTH_FPS))
+    novel = k == SYNTH_N_CLIPS - 1
+    c0, c1, shape_cols = _SYNTH_PALETTES[k % len(_SYNTH_PALETTES)]
+    rs = np.random.RandomState(1000 + k)
+    # Drifting shapes: (kind, x amplitude, y amplitude, x cycles, y cycles, x phase, y phase, size, colour).
+    params: List[Tuple[int, float, float, int, int, float, float, float, Color]] = [
+        (
+            int(rs.randint(3)),
+            float(rs.uniform(0.18, 0.32)), float(rs.uniform(0.18, 0.32)),
+            int(rs.randint(1, 3)), int(rs.randint(1, 3)),
+            float(rs.uniform(0, 2 * math.pi)), float(rs.uniform(0, 2 * math.pi)),
+            float(rs.uniform(0.16, 0.28)),
+            shape_cols[j % len(shape_cols)],
+        )
+        for j in range(3)
+    ]
+    angle0 = float(rs.uniform(0, math.pi))
+    frames = np.empty((n, h, w, 3), np.uint8)
+    for f in range(n):
+        t = f / n  # 0..1 over the loop
+        if novel:
+            # Hard cuts every 0.5 s between three high-contrast looks; one bold pulsing shape.
+            cut = int(t * SYNTH_DURATION_S * 2) % len(_NOVEL_LOOKS)
+            bg, fg = _NOVEL_LOOKS[cut]
+            img = np.empty((h, w, 3), np.uint8)
+            img[:] = bg
+            pulse = 0.5 + 0.5 * math.sin(2 * math.pi * t * 10)
+            cx = int(w * (0.5 + 0.22 * math.sin(2 * math.pi * t)))
+            cy = int(h * (0.45 + 0.18 * math.cos(2 * math.pi * 2 * t)))
+            r = int(min(w, h) * (0.22 + 0.10 * pulse))
+            if cut == 1:
+                box = cv2.boxPoints(((cx, cy), (r * 1.9, r * 1.9), 360.0 * t))
+                cv2.fillPoly(img, [np.int32(box).reshape(-1, 1, 2)], fg, cv2.LINE_AA)
+            elif cut == 2:
+                cv2.fillPoly(img, [_star(cx, cy, r * 1.25, r * 0.55, rot=2 * math.pi * t)], fg, cv2.LINE_AA)
+            else:
+                cv2.circle(img, (cx, cy), r, fg, -1, cv2.LINE_AA)
+                cv2.circle(img, (cx, cy), int(r * 0.45), bg, -1, cv2.LINE_AA)
+            for s_ in range(3):  # bold stripes sweeping upwards
+                y = int(((1.0 - (t * 2 + s_ / 3.0)) % 1.0) * h)
+                cv2.rectangle(img, (0, y), (w - 1, min(h - 1, y + 10)), fg, -1)
+            frames[f] = img
+            continue
+        angle = angle0 + 0.9 * math.sin(2 * math.pi * t)
+        img = _gradient(h, w, c0, c1, angle)
+        cv2.convertScaleAbs(img, dst=img, alpha=1.0 + 0.08 * math.sin(2 * math.pi * t * 2), beta=0)
+        layer = img.copy()
+        for kind, ax, ay, mx, my, px, py, size, col in params:
+            cx = int(w * (0.5 + ax * math.sin(2 * math.pi * (mx * t) + px)))
+            cy = int(h * (0.5 + ay * math.cos(2 * math.pi * (my * t) + py)))
+            sz = int(size * w)
+            if kind == 0:
+                cv2.circle(layer, (cx, cy), sz, col, -1, cv2.LINE_AA)
+            elif kind == 1:
+                box = cv2.boxPoints(((cx, cy), (sz * 1.5, sz * 1.1), 360.0 * t * mx))
+                cv2.fillPoly(layer, [np.int32(box).reshape(-1, 1, 2)], col, cv2.LINE_AA)
+            else:
+                cv2.fillPoly(layer, [_tri(cx, cy, sz, 2 * math.pi * t)], col, cv2.LINE_AA)
+        frames[f] = cv2.addWeighted(layer, 0.78, img, 0.22, 0)
+    name = f"synthetic_{k:02d}" + ("_novel" if novel else "")
+    return Clip(name, frames, SYNTH_FPS, synthetic=True, novel=novel)
+
+
+def clip_pool(clips_dir: str = "assets/clips", clip_res: Tuple[int, int] = CLIP_RES) -> List[Clip]:
+    """All ``*.mp4`` in ``clips_dir`` (sorted by name) as decoded clips, or placeholders.
+
+    Decoding happens once per ``(path, clip_res)`` and is shared across Feed
+    instances via a module-level cache.
+    """
+    res = (int(clip_res[0]), int(clip_res[1]))
+    d = _resolve_clips_dir(clips_dir)
+    paths = sorted(glob.glob(os.path.join(d, "*.mp4")))
+    pool: List[Clip] = []
+    if paths:
+        for path in paths:
+            key = (os.path.abspath(path), res)
+            clip = _CLIP_CACHE.get(key)
+            if clip is None:
+                clip = _decode_clip(path, res)
+                _CLIP_CACHE[key] = clip
+            pool.append(clip)
+        return pool
+    for k in range(SYNTH_N_CLIPS):
+        key = (f"<synthetic:{k}>", res)
+        clip = _CLIP_CACHE.get(key)
+        if clip is None:
+            clip = _synth_clip(k, res)
+            _CLIP_CACHE[key] = clip
+        pool.append(clip)
+    return pool
+
+
+# --------------------------------------------------------------------------- #
 # Feed
 # --------------------------------------------------------------------------- #
 class Feed:
@@ -205,6 +448,11 @@ class Feed:
         width, height: Panel size in full-resolution pixels.
         scale: Raster scale (``0.25`` -> 334 x 470 output).
         theme: ``'dark'`` (default) or ``'light'``.
+        autoplay*: Card-mode "autoplay" luminance cuts (see :meth:`_apply_autoplay`).
+        mode: ``'cards'`` (default) or ``'reels'`` (full-screen short-video feed).
+        clips_dir: Directory of ``*.mp4`` clips for reels mode (placeholders if empty).
+        clip_res: ``(w, h)`` of the cached clip frames (portrait 9:16 by default).
+        reels_seed: Seed of the clip shuffle in reels mode (defaults to ``seed``).
     """
 
     def __init__(
@@ -221,11 +469,18 @@ class Feed:
         novel_amp: float = 0.6,
         novel_hz: float = 1.0,
         autoplay_whole: bool = True,
+        mode: str = "cards",
+        clips_dir: str = "assets/clips",
+        clip_res: Tuple[int, int] = CLIP_RES,
+        reels_seed: Optional[int] = None,
     ) -> None:
         if panel not in PALETTES:
             raise ValueError("panel must be 'L' or 'R'")
         if theme not in THEMES:
             raise ValueError(f"unknown theme {theme!r}")
+        if mode not in MODES:
+            raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
+        self.mode = mode
         self.panel = panel
         self.seed = int(seed)
         self.width = int(width)
@@ -277,6 +532,24 @@ class Feed:
         # The rendered frame is a pure function of those inputs, so a hit is bit-identical.
         self._lum_cache: Optional[Tuple[tuple, np.ndarray]] = None
 
+        # Reels mode: clip pool (decoded lazily on first use), post sequence and overlay.
+        self.clips_dir = clips_dir
+        self.clip_res = (int(clip_res[0]), int(clip_res[1]))
+        self.reels_seed = self.seed if reels_seed is None else int(reels_seed)
+        self._pool: Optional[List[Clip]] = None
+        self._regular: List[int] = []
+        self._novel_clip = 0
+        self._reel_posts: Dict[int, dict] = {}
+        self._reel_sig: Optional[tuple] = None
+        self._ov_rgb: Optional[np.ndarray] = None
+        self._ov_a: Optional[np.ndarray] = None
+        self._ov_inv: Optional[np.ndarray] = None
+        self._ov_bands: List[Tuple[int, int]] = []
+        self._crop: Tuple[int, int, int, int] = (0, 0, 0, 0)
+        self._av_c: Tuple[int, int] = (0, 0)
+        self._av_r = 0
+        self._prog: Tuple[int, int, int, int] = (0, 0, 0, 0)
+
         self._update_counters()
 
     # ------------------------------------------------------------------ #
@@ -284,25 +557,59 @@ class Feed:
     # ------------------------------------------------------------------ #
     @property
     def state(self) -> Dict[str, object]:
-        """Current scroll state as a plain dict."""
-        return dict(
+        """Current scroll state as a plain dict.
+
+        Reels mode adds ``current_post``, ``clip_name``, ``clip_frame`` (frame
+        index of the current post's clip), ``n_clips`` and ``clips_synthetic``.
+        """
+        st: Dict[str, object] = dict(
             offset_px=float(self.offset),
             velocity=float(self.velocity),
             posts_consumed=int(self._posts_consumed),
             novel_visible=bool(self._novel_visible),
             novel_count=int(len(self._novel_seen)),
+            mode=self.mode,
         )
+        if self.mode == "reels":
+            pool = self._clip_pool()
+            cur = self._reel_current()
+            post = self._reel_post(cur)
+            st.update(
+                current_post=int(cur),
+                clip_name=pool[post["clip"]].name,
+                clip_frame=int(self._reel_frame_index(cur)),
+                n_clips=len(pool),
+                clips_synthetic=bool(pool[0].synthetic),
+            )
+        return st
+
+    @property
+    def clip_info(self) -> List[Dict[str, object]]:
+        """Per-clip metadata (name, fps, n_frames, synthetic, novel, contrast) in reels mode; ``[]`` otherwise."""
+        if self.mode != "reels":
+            return []
+        return [c.info for c in self._clip_pool()]
 
     def swipe(self, strength: float = 1.0) -> None:
         """Start an ease-out flick scrolling ``0.55 * height * strength`` px.
 
         A swipe that lands mid-animation carries the remaining distance of the
         previous flick over into the new one.
+
+        In reels mode a swipe instead snaps (ease-out, 0.35 s) to the next post
+        boundary after where the current animation would land; ``strength``
+        >= 2 skips ``int(strength)`` posts.
         """
         remaining = 0.0
         if self._anim is not None:
             dist, dur, el = self._anim
             remaining = dist * (1.0 - _ease_out(el / dur))
+        if self.mode == "reels":
+            landing = self.offset + remaining
+            n_posts = max(1, int(float(strength) + 1e-9))
+            target = (math.floor((landing + REEL_SNAP_EPS) / self.height) + n_posts) * self.height
+            self._anim = [target - self.offset, SWIPE_DURATION_S, 0.0]
+            return
         distance = remaining + SWIPE_FRACTION * self.height * float(strength)
         self._anim = [distance, SWIPE_DURATION_S, 0.0]
 
@@ -325,11 +632,16 @@ class Feed:
                 self._anim[2] = el2
         d += self._cont_v * dt
         new_off = max(0.0, self.offset + d)
+        if self.mode == "reels" and self._anim is None and self._cont_v == 0.0:
+            # Land exactly on the post boundary (kills float drift from the eased sum).
+            snapped = round(new_off / self.height) * self.height
+            if abs(snapped - new_off) <= REEL_SNAP_EPS:
+                new_off = float(snapped)
         self.velocity = (new_off - self.offset) / dt if dt > 0 else 0.0
         if new_off != self.offset:
             self._dirty = True
             self._base_frame = None
-        if self.autoplay and dt > 0:
+        if (self.autoplay or self.mode == "reels") and dt > 0:
             self._dirty = True
         self.offset = new_off
         self._update_counters()
@@ -341,6 +653,8 @@ class Feed:
         """Return the current frame as uint8 BGR ``(H*scale, W*scale, 3)``."""
         if self._frame is not None and not self._dirty:
             return self._frame
+        if self.mode == "reels":
+            return self._render_reels()
         if self._base_frame is not None:
             frame = self._apply_autoplay(self._base_frame)
             self._frame = frame
@@ -430,6 +744,8 @@ class Feed:
     def _frame_signature(self) -> tuple:
         """Everything the rendered frame depends on: the scroll offset and, with autoplay,
         the current cut index of every visible autoplaying card (see _apply_autoplay)."""
+        if self.mode == "reels":
+            return self._reel_signature()
         sig: List[object] = [self.offset]
         if not self.autoplay:
             return tuple(sig)
@@ -480,6 +796,15 @@ class Feed:
             self._tops.append(self._bottoms[i] + CARD_GAP)
 
     def _update_counters(self) -> None:
+        if self.mode == "reels":
+            self._posts_consumed = self._reel_current()
+            novel = False
+            for i, _ in self._reel_visible():
+                if self._reel_post(i)["novel"]:
+                    novel = True
+                    self._novel_seen.add(i)
+            self._novel_visible = novel
+            return
         off = self.offset
         bottom_edge = off + self.height
         self._ensure_layout_to(bottom_edge)
@@ -496,6 +821,222 @@ class Feed:
                 self._novel_seen.add(i)
             i += 1
         self._novel_visible = visible_novel
+
+    # ------------------------------------------------------------------ #
+    # Reels mode
+    # ------------------------------------------------------------------ #
+    def _clip_pool(self) -> List[Clip]:
+        """The decoded clip pool (loaded on first use) plus the per-seed post order."""
+        if self._pool is None:
+            pool = clip_pool(self.clips_dir, self.clip_res)
+            n = len(pool)
+            flagged = [k for k, c in enumerate(pool) if c.novel]
+            self._novel_clip = flagged[0] if flagged else int(np.argmax([c.contrast for c in pool]))
+            order = [int(k) for k in np.random.RandomState(self.reels_seed & 0x7FFFFFFF).permutation(n)]
+            # Non-novel posts cycle through the shuffled pool minus the novel clip (if the pool allows).
+            self._regular = [k for k in order if k != self._novel_clip] if n >= 3 else order
+            self._pool = pool
+        return self._pool
+
+    def _reel_post(self, i: int) -> dict:
+        """Post ``i``: ``clip`` index, ``novel`` flag, ``phase`` (0..1 start point) and ``accent``."""
+        post = self._reel_posts.get(i)
+        if post is None:
+            self._clip_pool()
+            rs = np.random.RandomState((self.seed * 1_000_003 + i * 7919 + 777) & 0x7FFFFFFF)
+            novel = self._is_novel(i)
+            clip = self._novel_clip if novel else self._regular[i % len(self._regular)]
+            accents = self.palette["accent"]
+            post = dict(clip=clip, novel=novel, phase=float(rs.uniform(0.0, 1.0)), accent=accents[rs.randint(len(accents))])
+            self._reel_posts[i] = post
+        return post
+
+    def _reel_current(self) -> int:
+        """Index of the post whose top is at (or just above) the screen top."""
+        return int(math.floor((self.offset + REEL_SNAP_EPS) / self.height))
+
+    def _reel_visible(self) -> List[Tuple[int, int]]:
+        """``(post index, raster y of its top)`` for every post intersecting the screen."""
+        cur = self._reel_current()
+        out: List[Tuple[int, int]] = []
+        for i in (cur, cur + 1):
+            y_full = i * self.height - self.offset
+            if y_full >= self.height - REEL_SNAP_EPS:
+                break
+            out.append((i, int(round(y_full * self.scale))))
+        return out
+
+    def _reel_frame_index(self, i: int) -> int:
+        """Frame of post ``i``'s clip at the current time (loops; pure function of seed and time)."""
+        post = self._reel_post(i)
+        clip = self._clip_pool()[post["clip"]]
+        return int(math.floor(self.time_s * clip.fps + post["phase"] * clip.n_frames)) % clip.n_frames
+
+    def _reel_signature(self) -> tuple:
+        """Everything a reels frame depends on: offset and the clip frame of each visible post."""
+        return (round(self.offset, 3),) + tuple((i, self._reel_frame_index(i)) for i, _ in self._reel_visible())
+
+    def _render_reels(self) -> np.ndarray:
+        sig = self._reel_signature()
+        if self._frame is not None and sig == self._reel_sig:
+            self._dirty = False
+            return self._frame
+        if self._ov_rgb is None:
+            self._build_reel_overlay()
+        frame = np.empty((self.out_h, self.out_w, 3), np.uint8)
+        frame[:] = self.theme["bg"]
+        for i, y in self._reel_visible():
+            panel = self._reel_panel(i)
+            ya, yb = max(0, y), min(self.out_h, y + self.out_h)
+            if yb > ya:
+                frame[ya:yb] = panel[ya - y : yb - y]
+        self._frame = frame
+        self._reel_sig = sig
+        self._dirty = False
+        return frame
+
+    def _reel_panel(self, i: int) -> np.ndarray:
+        """Full panel image for post ``i``: clip frame (cover) + overlay + dynamic bits."""
+        post = self._reel_post(i)
+        clip = self._clip_pool()[post["clip"]]
+        fi = self._reel_frame_index(i)
+        x0, x1, y0, y1 = self._crop
+        src = clip.frames[fi, y0:y1, x0:x1]
+        img: np.ndarray = cv2.resize(src, (self.out_w, self.out_h), interpolation=cv2.INTER_LINEAR)
+        assert self._ov_rgb is not None and self._ov_a is not None and self._ov_inv is not None
+        for b0, b1 in self._ov_bands:
+            img[b0:b1] = cv2.blendLinear(img[b0:b1], self._ov_rgb[b0:b1], self._ov_inv[b0:b1], self._ov_a[b0:b1])
+        # Avatar fill (per-post accent) and progress-bar fill (per-frame).
+        cv2.circle(img, self._av_c, self._av_r, post["accent"], -1, cv2.LINE_AA)
+        px0, py0, px1, py1 = self._prog
+        xe = px0 + int(round((px1 - px0) * (fi + 1) / clip.n_frames))
+        if xe > px0 and py1 > py0:
+            cv2.rectangle(img, (px0, py0), (xe - 1, py1 - 1), (245, 245, 245), -1)
+        return img
+
+    def _build_reel_overlay(self) -> None:
+        """Pre-render the static overlay as an RGBA layer at raster size (and the cover crop)."""
+        # Cover crop of the clip frame for the panel aspect (in clip pixels).
+        cw, ch = self.clip_res
+        panel_aspect = self.width / self.height
+        if cw / ch < panel_aspect:       # clip taller than panel -> crop rows
+            keep = max(1, int(round(cw / panel_aspect)))
+            y0 = (ch - keep) // 2
+            self._crop = (0, cw, y0, y0 + keep)
+        else:                            # clip wider -> crop columns
+            keep = max(1, int(round(ch * panel_aspect)))
+            x0 = (cw - keep) // 2
+            self._crop = (x0, x0 + keep, 0, ch)
+
+        S = self._S
+        H, W = S(self.height), S(self.width)
+        premul: np.ndarray = np.zeros((H, W, 3), np.float32)
+        alpha: np.ndarray = np.zeros((H, W), np.float32)
+
+        def over(mask: np.ndarray, color: Color, a: float) -> None:
+            """Composite a shape (coverage ``mask`` 0..255, ``color``, opacity ``a``) over the layer."""
+            a_s = mask.astype(np.float32) * (a / 255.0)
+            premul[:] = premul * (1.0 - a_s)[..., None] + np.asarray(color, np.float32) * a_s[..., None]
+            alpha[:] = a_s + alpha * (1.0 - a_s)
+
+        def shape(draw, color: Color, a: float, dx: int = 0, dy: int = 0) -> None:  # type: ignore[no-untyped-def]
+            mk = np.zeros((H, W), np.uint8)
+            draw(mk, dx, dy)
+            over(mk, color, a)
+
+        def rr(mk: np.ndarray, x0: int, y0: int, x1: int, y1: int, r: int) -> None:
+            """Rounded rectangle ``[x0,x1) x [y0,y1)`` into coverage mask ``mk`` (supersampled px)."""
+            if x1 > x0 and y1 > y0:
+                mk[y0:y1, x0:x1] = np.maximum(mk[y0:y1, x0:x1], _rounded_mask(y1 - y0, x1 - x0, r))
+
+        # Bottom and top gradients (black).
+        ys = np.arange(H, dtype=np.float32) / max(H - 1, 1)
+        g_bot = np.clip((ys - 0.52) / 0.48, 0.0, 1.0) ** 1.6 * 0.78
+        g_top = np.clip(1.0 - ys / 0.12, 0.0, 1.0) ** 1.5 * 0.35
+        over(np.broadcast_to((np.maximum(g_bot, g_top) * 255.0)[:, None], (H, W)), (0, 0, 0), 1.0)
+
+        m = REEL_MARGIN
+        white: Color = (255, 255, 255)
+        grey: Color = (215, 218, 224)
+        grey_dim: Color = (185, 190, 200)
+        shadow: Color = (0, 0, 0)
+
+        # --- Bottom-left: avatar ring + handle bars + caption bars ----------------------
+        av_r = 52
+        av_cx, av_cy = m + av_r, self.height - 330
+        self._av_c = (int(round(av_cx * self.scale)), int(round(av_cy * self.scale)))
+        self._av_r = max(1, int(round((av_r - 6) * self.scale)))
+        shape(lambda mk, dx, dy: cv2.circle(mk, (S(av_cx + dx), S(av_cy + dy)), S(av_r + 4), 255, -1, cv2.LINE_AA), shadow, 0.35, 4, 6)
+        shape(lambda mk, dx, dy: cv2.circle(mk, (S(av_cx), S(av_cy)), S(av_r), 255, -1, cv2.LINE_AA), white, 0.95)
+        hx = av_cx + av_r + 30
+        col_x = self.width - m - 140          # left edge of the right icon column
+        shape(lambda mk, dx, dy: rr(mk, S(hx), S(av_cy - 40), S(hx + 330), S(av_cy - 6), S(17)), grey, 0.92)
+        shape(lambda mk, dx, dy: rr(mk, S(hx), S(av_cy + 10), S(hx + 200), S(av_cy + 36), S(13)), grey_dim, 0.8)
+        cap_w = col_x - m - 40
+        shape(lambda mk, dx, dy: rr(mk, S(m), S(self.height - 236), S(m + int(cap_w * 0.92)), S(self.height - 206), S(15)), grey, 0.85)
+        shape(lambda mk, dx, dy: rr(mk, S(m), S(self.height - 190), S(m + int(cap_w * 0.55)), S(self.height - 160), S(15)), grey, 0.7)
+        # Small "sound" pill under the caption: a disc with a short bar.
+        shape(lambda mk, dx, dy: cv2.circle(mk, (S(m + 22), S(self.height - 112)), S(22), 255, -1, cv2.LINE_AA), grey_dim, 0.75)
+        shape(lambda mk, dx, dy: rr(mk, S(m + 60), S(self.height - 124), S(m + 260), S(self.height - 100), S(12)), grey_dim, 0.6)
+
+        # --- Right column: heart / comment / share + count bars -------------------------
+        icx = col_x + 70
+        icon_ys = [self.height - 800, self.height - 590, self.height - 380]
+
+        def heart(mk: np.ndarray, dx: int, dy: int) -> None:
+            cx, cy = icx + dx, icon_ys[0] + dy
+            cv2.circle(mk, (S(cx - 24), S(cy - 16)), S(28), 255, -1, cv2.LINE_AA)
+            cv2.circle(mk, (S(cx + 24), S(cy - 16)), S(28), 255, -1, cv2.LINE_AA)
+            pts = np.array([(S(cx - 51), S(cy - 6)), (S(cx + 51), S(cy - 6)), (S(cx), S(cy + 54))], np.int32).reshape(-1, 1, 2)
+            cv2.fillPoly(mk, [pts], 255, cv2.LINE_AA)
+
+        def comment(mk: np.ndarray, dx: int, dy: int) -> None:
+            cx, cy = icx + dx, icon_ys[1] + dy
+            cv2.ellipse(mk, (S(cx), S(cy - 8)), (S(50), S(40)), 0, 0, 360, 255, -1, cv2.LINE_AA)
+            pts = np.array([(S(cx - 34), S(cy + 18)), (S(cx - 10), S(cy + 30)), (S(cx - 46), S(cy + 50))], np.int32).reshape(-1, 1, 2)
+            cv2.fillPoly(mk, [pts], 255, cv2.LINE_AA)
+
+        def share(mk: np.ndarray, dx: int, dy: int) -> None:
+            cx, cy = icx + dx, icon_ys[2] + dy
+            pts = np.array([(S(cx + 6), S(cy - 52)), (S(cx + 54), S(cy - 12)), (S(cx + 6), S(cy + 28))], np.int32).reshape(-1, 1, 2)
+            cv2.fillPoly(mk, [pts], 255, cv2.LINE_AA)
+            cv2.ellipse(mk, (S(cx - 6), S(cy + 30)), (S(42), S(42)), 0, 90, 300, 255, max(1, S(16)), cv2.LINE_AA)
+
+        for draw in (heart, comment, share):
+            shape(draw, shadow, 0.4, 4, 6)
+            shape(draw, white, 0.94)
+        for cy in icon_ys:
+            shape(lambda mk, dx, dy, cy=cy: rr(mk, S(icx - 40), S(cy + 76), S(icx + 40), S(cy + 96), S(10)), grey, 0.9)
+        # Disc at the bottom of the column (a "sound cover" placeholder).
+        shape(lambda mk, dx, dy: cv2.circle(mk, (S(icx), S(self.height - 200)), S(46), 255, -1, cv2.LINE_AA), grey_dim, 0.7)
+        shape(lambda mk, dx, dy: cv2.circle(mk, (S(icx), S(self.height - 200)), S(18), 255, -1, cv2.LINE_AA), (40, 40, 44), 0.9)
+
+        # --- Progress bar track (fill is drawn per frame) --------------------------------
+        pb_y0, pb_y1 = self.height - 16, self.height - 8
+        shape(lambda mk, dx, dy: cv2.rectangle(mk, (0, S(pb_y0)), (W - 1, S(pb_y1) - 1), 255, -1), white, 0.3)
+        self._prog = (0, int(round(pb_y0 * self.scale)), self.out_w, int(round(pb_y1 * self.scale)))
+
+        # Downsample (premultiplied) to raster size and split into RGB + alpha.
+        if self.ss != 1:
+            premul = cv2.resize(premul, (self.out_w, self.out_h), interpolation=cv2.INTER_AREA)
+            alpha = cv2.resize(alpha, (self.out_w, self.out_h), interpolation=cv2.INTER_AREA)
+        a = np.clip(alpha, 0.0, 1.0).astype(np.float32)
+        rgb = premul / np.maximum(a, 1e-3)[..., None]
+        self._ov_rgb = np.clip(rgb + 0.5, 0, 255).astype(np.uint8)
+        self._ov_a = np.ascontiguousarray(a)
+        self._ov_inv = np.ascontiguousarray(1.0 - a)
+        # Row bands where the overlay has any coverage (blend only there).
+        rows = np.flatnonzero(a.max(axis=1) > 0.5 / 255.0)
+        bands: List[Tuple[int, int]] = []
+        if rows.size:
+            start = prev = int(rows[0])
+            for r in rows[1:]:
+                if int(r) != prev + 1:
+                    bands.append((start, prev + 1))
+                    start = int(r)
+                prev = int(r)
+            bands.append((start, prev + 1))
+        self._ov_bands = bands
 
     # ------------------------------------------------------------------ #
     # Card specification (pure function of seed and index)
@@ -749,23 +1290,29 @@ class Feed:
 # --------------------------------------------------------------------------- #
 # Module API
 # --------------------------------------------------------------------------- #
-def make_pair(seed_l: int = 1, seed_r: int = 2, scale: float = 0.25, **kw) -> Tuple[Feed, Feed]:
-    """Create the (left, right) feed pair with independent palettes."""
-    return Feed("L", seed_l, scale=scale, **kw), Feed("R", seed_r, scale=scale, **kw)
+def make_pair(seed_l: int = 1, seed_r: int = 2, scale: float = 0.25, mode: str = "cards", clips_dir: str = "assets/clips", **kw) -> Tuple[Feed, Feed]:
+    """Create the (left, right) feed pair with independent palettes.
+
+    ``mode`` / ``clips_dir`` select the feed type (see the module docstring);
+    remaining keyword arguments (autoplay*, theme, clip_res, reels_seed, ...) are
+    forwarded to both :class:`Feed` instances.
+    """
+    return Feed("L", seed_l, scale=scale, mode=mode, clips_dir=clips_dir, **kw), Feed("R", seed_r, scale=scale, mode=mode, clips_dir=clips_dir, **kw)
 
 
-def _demo() -> None:
-    """Render a 6 s / 60 fps side-by-side demo video and a still frame."""
+def _demo(mode: str = "cards") -> None:
+    """Render a 6 s / 60 fps side-by-side demo video and a still frame (``python feeds.py [cards|reels]``)."""
     import imageio.v2 as imageio
 
-    out_dir = "/home/user/DoomFly/out"
+    out_dir = os.path.join(_repo_root(), "out")
     os.makedirs(out_dir, exist_ok=True)
-    mp4_path = os.path.join(out_dir, "feeds_demo.mp4")
-    png_path = os.path.join(out_dir, "feeds_demo.png")
+    tag = "feeds_demo" if mode == "cards" else f"{mode}_demo"
+    mp4_path = os.path.join(out_dir, f"{tag}.mp4")
+    png_path = os.path.join(out_dir, f"{tag}.png")
 
     fps = 60
     n_frames = 6 * fps
-    left, right = make_pair()
+    left, right = make_pair(mode=mode)
     swipes_l = {int(round(t * fps)) for t in (1.0, 2.2, 4.0)}
     swipes_r = {int(round(t * fps)) for t in (1.5, 3.1, 5.0)}
     hinge = np.empty((left.out_h, 8, 3), np.uint8)
@@ -806,4 +1353,6 @@ def _demo() -> None:
 
 
 if __name__ == "__main__":
-    _demo()
+    import sys
+
+    _demo(sys.argv[1] if len(sys.argv) > 1 else "cards")
