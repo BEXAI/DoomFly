@@ -260,11 +260,14 @@ spikes in the 0.5 s after a swipe. Figure: `docs/figures/episode_v2_s1.png`.
 
 Pure OpenCV/numpy compositing at 1080 × 1920, 60 fps (≈ 22 fps render): a dark navy floor with a
 glowing perspective grid, the open two-panel device mock-up (two 1335 × 1878 portrait panels,
-crease, titanium bevel, two-layer drop shadow, **no logo, no real UI**), and a 2.5D-shaded
-Drosophila built procedurally (lit ellipsoids with specular and rim light, banded abdomen, bristled
-thorax, glossy faceted red eyes, translucent veined wings, cylinder-shaded legs with claws, soft
-contact shadow) perched head-up over the hinge; its front-left / front-right leg flicks on each
-swipe. The 460 × 460 PiP is a depth-weighted, bloomed point cloud of the 165,898 soma positions
+crease, titanium bevel, two-layer drop shadow, **no logo, no real UI**), and the fly perched
+head-up over the hinge. The fly is a photoreal render supplied by the author
+(`assets/fly_reference.jpg`), turned into a sprite by `src/build_fly_sprite.py`: a soft alpha matte
+from the black background that keeps the wings translucent, the front legs removed by inpainting,
+and eye / leg anchors recorded in `assets/fly_sprite.json`. The front legs are drawn procedurally
+from those anchors with two-bone inverse kinematics, matched to the photo's leg colours and widths,
+and the front-left / front-right leg flicks on each swipe. `--fly procedural` restores the earlier
+fully procedural 2.5D-shaded fly. The 460 × 460 PiP is a depth-weighted, bloomed point cloud of the 165,898 soma positions
 (optic lobes amber, central brain and VNC cool blue, descending neurons green, front-leg MNs
 magenta; the volume's x axis is mirrored so the fly's left lobe is on the viewer's left, like the
 head-up fly) with a slow ±12° yaw, lit frame-accurately by the spike file. HUD: the
