@@ -22,14 +22,15 @@
  ],
  "hinge_line": [
   [
-   509.0,
-   93.33
+   505.06,
+   93.72
   ],
   [
-   509.0,
-   933.4
+   504.96,
+   933.3
   ]
  ],
+ "hinge_line_note": "centre line of the hinge gap between the two screen edges, top and bottom of the screens",
  "panel_mm": [
   79.0,
   111.0
@@ -48,8 +49,8 @@
      93.33
     ],
     [
-     498.0,
-     933.4
+     497.9,
+     933.42
     ],
     [
      52.27,
@@ -63,7 +64,7 @@
     "bottom-left"
    ],
    "size_px_mean": [
-    450.3,
+    450.2,
     903.4
    ],
    "apparent_aspect": 0.4984,
@@ -75,13 +76,31 @@
    },
    "corner_radius_px": 56.8,
    "fit": {
-    "outer_rms": 0.392,
-    "hinge_rms": 0.0,
-    "top_rms": 0.402,
-    "n_outer": 710,
-    "n_hinge": 576,
-    "n_top": 287,
-    "n_bottom_direct": 0
+    "n_bottom_direct": 0,
+    "outer": {
+     "n": 711,
+     "inlier_frac": 0.999,
+     "rms_px": 0.392,
+     "outliers_inward": 1,
+     "outliers_outward": 0,
+     "span_px": 740.0
+    },
+    "hinge": {
+     "n": 648,
+     "inlier_frac": 0.994,
+     "rms_px": 0.213,
+     "outliers_inward": 4,
+     "outliers_outward": 0,
+     "span_px": 705.0
+    },
+    "top": {
+     "n": 308,
+     "inlier_frac": 0.932,
+     "rms_px": 0.402,
+     "outliers_inward": 19,
+     "outliers_outward": 2,
+     "span_px": 363.6
+    }
    }
   },
   "R": {
@@ -122,13 +141,31 @@
    },
    "corner_radius_px": 51.2,
    "fit": {
-    "outer_rms": 0.173,
-    "hinge_rms": 0.273,
-    "top_rms": 0.335,
-    "n_outer": 485,
-    "n_hinge": 525,
-    "n_top": 250,
-    "n_bottom_direct": 3
+    "n_bottom_direct": 3,
+    "outer": {
+     "n": 547,
+     "inlier_frac": 0.887,
+     "rms_px": 0.173,
+     "outliers_inward": 62,
+     "outliers_outward": 0,
+     "span_px": 733.0
+    },
+    "hinge": {
+     "n": 535,
+     "inlier_frac": 0.981,
+     "rms_px": 0.273,
+     "outliers_inward": 10,
+     "outliers_outward": 0,
+     "span_px": 708.0
+    },
+    "top": {
+     "n": 272,
+     "inlier_frac": 0.919,
+     "rms_px": 0.335,
+     "outliers_inward": 21,
+     "outliers_outward": 1,
+     "span_px": 368.7
+    }
    }
   }
  },

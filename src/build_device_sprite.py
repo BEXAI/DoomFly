@@ -15,7 +15,8 @@ Output: assets/duo_sprite.png      RGBA, **premultiplied over black** (same conv
                                    see ``COORDINATE CONVENTION`` below)
         out/duo_sprite_check.png   sprite over a blue checker with the quads drawn (+ zoomed
                                    corners in out/duo_sprite_check_zoom.png)
-        out/duo_warp_check.png     two grid test panels warped onto the screens (``warp_panels``)
+        out/duo_warp_check.png     two grid test panels warped onto the screens (``warp_panels``;
+                                   corner zooms in out/duo_warp_check_zoom.png)
 
 Screen-edge measurement (all automatic; the constants below only pick the scan windows):
   * Scanning inward from the device silhouette, every outer edge has the same structure:
@@ -165,12 +166,12 @@ def scan_hinge(p: np.ndarray) -> Optional[int]:
 
 def silhouette(lum: np.ndarray) -> np.ndarray:
     """Device mask: everything enclosed by the bright body (screens and hinge gap included)."""
-    m = (lum > 24).astype(np.uint8)
+    m: np.ndarray = (lum > 24).astype(np.uint8)
     m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
     n, lab, st, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
     big = 1 + int(np.argmax(st[1:, 4]))
     m = (lab == big).astype(np.uint8)
-    inv = (m == 0).astype(np.uint8)
+    inv: np.ndarray = (m == 0).astype(np.uint8)
     n, lab, st, _ = cv2.connectedComponentsWithStats(inv, connectivity=4)
     h, w = m.shape
     for i in range(1, n):
@@ -185,12 +186,12 @@ def measure_screens(lum: np.ndarray, sil: np.ndarray) -> Dict[str, Any]:
     H, W = lum.shape
     rows = np.arange(SIDE_ROWS[0], SIDE_ROWS[1] + 1)
 
-    # hinge centre: the black gap between the screens (column means over the middle rows)
-    band = lum[400:1000, 650:760].mean(0)
-    gap = runs(band < 6)
+    # hinge centre: the black gap between the screens = the columns that are black in > 90 %
+    # of the middle rows (the hinge highlight is only a few rows tall)
+    band = (lum[400:1000, 650:760] < BLACK).mean(0)
+    gap = runs(band > 0.9)
     gs, ge = max(gap, key=lambda r: r[1] - r[0])
-    hinge_c = 650 + (gs + ge) // 2                     # integer column on the hinge line
-    hinge_x = 650 + 0.5 * (gs + ge)                    # continuous (pixel-corner coords)
+    hinge_c = 650 + (gs + ge) // 2                     # integer column inside the gap (scan start)
 
     def outer_side(side: str) -> Tuple[np.ndarray, np.ndarray]:
         scr, cham = [], []
@@ -247,7 +248,7 @@ def measure_screens(lum: np.ndarray, sil: np.ndarray) -> Dict[str, Any]:
                     scr.append((x + 0.5, y0 - j + 1))
         return np.array(scr, np.float64), np.array(cham, np.float64)
 
-    out: Dict[str, Any] = {"hinge_x": hinge_x, "screens": {}}
+    out: Dict[str, Any] = {"screens": {}}
     for side in ("L", "R"):
         outer_pts, outer_cham = outer_side(side)
         hinge_pts = hinge_side(side)
@@ -301,13 +302,19 @@ def measure_screens(lum: np.ndarray, sil: np.ndarray) -> Dict[str, Any]:
             r = fit_corner_radius(np.array(corner), (ln_a, pa), (ln_b, pb))
             if r is not None:
                 radii.append(r)
-        resid = {
-            "outer_rms": float(np.sqrt(np.mean(line_dist(l_outer, outer_pts[in_o]) ** 2))),
-            "hinge_rms": float(np.sqrt(np.mean(line_dist(l_hinge, hinge_pts[in_h]) ** 2))),
-            "top_rms": float(np.sqrt(np.mean(line_dist(l_top, top_pts[in_t]) ** 2))),
-            "n_outer": int(in_o.sum()), "n_hinge": int(in_h.sum()), "n_top": int(in_t.sum()),
-            "n_bottom_direct": int(len(bot_direct)),
-        }
+        resid: Dict[str, Any] = {"n_bottom_direct": int(len(bot_direct))}
+        for name, ln, pts, inl in (("outer", l_outer, outer_pts, in_o), ("hinge", l_hinge, hinge_pts, in_h),
+                                   ("top", l_top, top_pts, in_t)):
+            # signed deviation, positive = towards the screen centre.  Outliers are expected
+            # INWARD only (dark content pushes the detected transition into the screen); an
+            # outward outlier would mean the scan locked onto a frame groove in that column.
+            sgn = 1.0 if float(line_dist(ln, quad.mean(0)[None, :])[0]) > 0 else -1.0
+            dev = line_dist(ln, pts) * sgn
+            span = float(np.hypot(*(pts.max(0) - pts.min(0))))
+            resid[name] = {"n": int(len(pts)), "inlier_frac": round(float(inl.mean()), 3),
+                           "rms_px": round(float(np.sqrt(np.mean(dev[inl] ** 2))), 3),
+                           "outliers_inward": int((dev > 1.0).sum()), "outliers_outward": int((dev < -1.0).sum()),
+                           "span_px": round(span, 1)}
         if len(bot_direct) >= 5:
             resid["bottom_direct_vs_model_px"] = float(np.median(line_dist(l_bot, bot_direct)))
         out["screens"][side] = {
@@ -382,8 +389,8 @@ def fill_poly_aa(shape: Tuple[int, int], pts_corner: np.ndarray) -> np.ndarray:
 def screen_hole_mask(shape: Tuple[int, int], quad: np.ndarray, radius_px: float) -> np.ndarray:
     """Rounded-rectangle screen mask (1 inside) warped onto ``quad`` (pixel-corner coords)."""
     q = np.asarray(quad, np.float64)
-    w = 0.5 * (np.linalg.norm(q[1] - q[0]) + np.linalg.norm(q[2] - q[3]))
-    h = 0.5 * (np.linalg.norm(q[3] - q[0]) + np.linalg.norm(q[2] - q[1]))
+    w = float(0.5 * (np.linalg.norm(q[1] - q[0]) + np.linalg.norm(q[2] - q[3])))
+    h = float(0.5 * (np.linalg.norm(q[3] - q[0]) + np.linalg.norm(q[2] - q[1])))
     Hm = panel_homography(w, h, q)
     poly = warp_points(Hm, rounded_rect_poly(w, h, radius_px))
     return fill_poly_aa(shape, poly)
@@ -416,8 +423,8 @@ def warp_panels(frame_bgr_L: np.ndarray, frame_bgr_R: np.ndarray, sprite_rgba: n
         Hc = shift @ Hm @ np.linalg.inv(shift)
         warped = cv2.warpPerspective(bgra, Hc, (w, h), flags=cv2.INTER_LINEAR,
                                      borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
-        a = warped[..., 3:4] / 255.0
-        canvas = warped[..., :3] + (1.0 - a) * canvas
+        a = warped[..., 3:4].astype(np.float32) / 255.0
+        canvas = (warped[..., :3] + (1.0 - a) * canvas).astype(np.float32)
     pm = sprite_rgba[..., :3].astype(np.float32)
     alpha = sprite_rgba[..., 3:4].astype(np.float32) / 255.0
     return np.clip(pm + (1.0 - alpha) * canvas, 0, 255).astype(np.uint8)
@@ -476,9 +483,9 @@ def main() -> int:
     alpha *= 1.0 - holes
 
     pm = img.astype(np.float32) - (1.0 - alpha)[..., None] * bg_level[None, None, :]
-    pm = np.clip(pm, 0, 255) * (1.0 - holes)[..., None]        # no screen colour survives
-    alpha = cv2.GaussianBlur(alpha, (5, 5), 0.7)                 # ~1.5 px feather
-    pm = cv2.GaussianBlur(pm, (5, 5), 0.7)
+    pm = (np.clip(pm, 0, 255) * (1.0 - holes)[..., None]).astype(np.float32)   # no screen colour survives
+    alpha = cv2.GaussianBlur(alpha, (5, 5), 0.7).astype(np.float32)   # ~1.5 px feather
+    pm = cv2.GaussianBlur(pm, (5, 5), 0.7).astype(np.float32)
     pm = np.minimum(pm, 255.0 * alpha[..., None] + 1e-3)
     # hard zero strictly inside the holes (the blur may leak a fraction of a level inward)
     inner = cv2.erode((holes > 0.999).astype(np.uint8), np.ones((5, 5), np.uint8))
@@ -500,9 +507,10 @@ def main() -> int:
 
     sys_, sxs = np.where(sil > 0)
     dev_bbox = [int(sxs.min()) - x0, int(sys_.min()) - y0, int(sxs.max()) + 1 - x0, int(sys_.max()) + 1 - y0]
-    hinge_x = float(meas["hinge_x"])
-    hinge_top = min(meas["screens"]["L"]["quad"][1][1], meas["screens"]["R"]["quad"][0][1])
-    hinge_bot = max(meas["screens"]["L"]["quad"][2][1], meas["screens"]["R"]["quad"][3][1])
+    # hinge centre line: midway between the two hinge-side screen edges, spanning the screens
+    qL, qR = meas["screens"]["L"]["quad"], meas["screens"]["R"]["quad"]
+    hinge_top = (0.5 * (qL[1] + qR[0])).tolist()
+    hinge_bot = (0.5 * (qL[2] + qR[3])).tolist()
 
     screens_json: Dict[str, Any] = {}
     for s in ("L", "R"):
@@ -517,7 +525,7 @@ def main() -> int:
             "apparent_aspect": round(float(qw / qh), 4),
             "bezel_px": {k: round(float(v), 2) for k, v in m["bezel_px"].items()},
             "corner_radius_px": round(float(m["corner_radius_px"]), 1),
-            "fit": {k: (round(float(v), 3) if isinstance(v, float) else v) for k, v in m["fit"].items()},
+            "fit": m["fit"],
         }
     meta: Dict[str, Any] = {
         "source": os.path.relpath(SRC, ROOT),
@@ -527,7 +535,8 @@ def main() -> int:
         "crop_origin": [int(x0), int(y0)],
         "sprite_size": [int(w), int(h)],
         "device_bbox": dev_bbox,
-        "hinge_line": [sp((hinge_x, hinge_top)), sp((hinge_x, hinge_bot))],
+        "hinge_line": [sp(hinge_top), sp(hinge_bot)],
+        "hinge_line_note": "centre line of the hinge gap between the two screen edges, top and bottom of the screens",
         "panel_mm": list(PANEL_MM),
         "panel_aspect": round(PANEL_MM[0] / PANEL_MM[1], 4),
         "screen_corner_radius_px": round(radius, 1),
@@ -556,6 +565,9 @@ def main() -> int:
     tiles = []
     for s, col in (("L", (255, 255, 0)), ("R", (0, 140, 255))):
         q = meas["screens"][s]["quad"]
+        qw_ = float(0.5 * (np.linalg.norm(q[1] - q[0]) + np.linalg.norm(q[2] - q[3])))
+        qh_ = float(0.5 * (np.linalg.norm(q[3] - q[0]) + np.linalg.norm(q[2] - q[1])))
+        hole_poly = warp_points(panel_homography(qw_, qh_, q), rounded_rect_poly(qw_, qh_, radius, 24))
         spots = [q[0], 0.5 * (q[0] + q[1]), q[1], 0.5 * (q[1] + q[2]), q[2], 0.5 * (q[2] + q[3]), q[3], 0.5 * (q[3] + q[0])]
         for p in spots:
             cx, cy = int(round(p[0])), int(round(p[1]))
@@ -565,6 +577,8 @@ def main() -> int:
             for i in range(4):
                 cv2.line(tile, (int(round((qz[i][0] - 0.5) * 16)), int(round((qz[i][1] - 0.5) * 16))),
                          (int(round((qz[(i + 1) % 4][0] - 0.5) * 16)), int(round((qz[(i + 1) % 4][1] - 0.5) * 16))), col, 1, cv2.LINE_AA, shift=4)
+            hp = np.round(((hole_poly - np.array([ox, oy])) * 4 - 0.5) * 16).astype(np.int32)
+            cv2.polylines(tile, [hp.reshape(-1, 1, 2)], True, (255, 0, 255), 1, cv2.LINE_AA, shift=4)
             tiles.append(tile)
     cv2.imwrite(os.path.join(OUT_DIR, "duo_sprite_check_zoom.png"), np.concatenate([np.concatenate(tiles[:8], 1), np.concatenate(tiles[8:], 1)], 0))
 
