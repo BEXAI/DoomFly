@@ -258,10 +258,17 @@ spikes in the 0.5 s after a swipe. Figure: `docs/figures/episode_v2_s1.png`.
 
 ## 7. Video (`src/render.py`)
 
-Pure OpenCV/numpy compositing at 1080 × 1920, 60 fps (≈ 22 fps render): a dark navy floor with a
-glowing perspective grid, the open two-panel device mock-up (two 1335 × 1878 portrait panels,
-crease, titanium bevel, two-layer drop shadow, **no logo, no real UI**), and the fly perched
-head-up over the hinge. The fly is a photoreal render supplied by the author
+Pure OpenCV/numpy compositing at 1080 × 1920, 60 fps (≈ 20 fps render): a dark navy floor with a
+glowing perspective grid, the open two-panel device and the fly perched head-up over the hinge.
+The device is the photoreal open Duo supplied by the author (`assets/duo_reference.jpg`), turned
+into a sprite by `src/build_device_sprite.py`: the screens in the photo are located by RANSAC line
+fits to the bezel edges (RMS 0.2–0.4 px), cut out as rounded quads, and the device is stored as a
+premultiplied RGBA matte (`assets/duo_sprite.png`) with the two screen quads, the hinge line and
+the corner radius in `assets/duo_sprite.json`. At render time the two feed rasters are
+perspective-warped into those quads (INTER_AREA shrink, then a homography per screen), so the feeds
+sit behind the real bezels with the photo's foreshortening. The screen content of the photo is
+never shown: the panels carry only our own synthetic feeds (**no logo, no real UI**).
+`--device procedural` restores the flat two-panel mock-up (crease, titanium bevel, drop shadow). The fly is a photoreal render supplied by the author
 (`assets/fly_reference.jpg`), turned into a sprite by `src/build_fly_sprite.py`: a soft alpha matte
 from the black background that keeps the wings translucent, the front legs removed by inpainting,
 and eye / leg anchors recorded in `assets/fly_sprite.json`. The front legs are drawn procedurally
@@ -273,7 +280,20 @@ magenta; the volume's x axis is mirrored so the fly's left lobe is on the viewer
 head-up fly) with a slow ±12° yaw, lit frame-accurately by the spike file. HUD: the
 descending-neuron rate per side against its 1.5 Hz threshold, posts consumed L / R, swipes,
 spikes/s with a sparkline; title card (0–4 s), stats card (38–46 s), attribution card (46–50 s).
-Feed frames are replayed deterministically from the swipe times and meta line in the events log.
+Feed frames are replayed deterministically from the swipe times and meta line in the events log,
+in the feed mode the episode was run with (`feed_mode` / `clips_dir` in the meta line).
+
+**Feed modes (`src/feeds.py`).** `cards` (the published results): synthetic post cards with a
+1 Hz autoplay hard cut. `reels` (`--feed-mode reels`): a full-screen short-video feed. Each swipe
+snaps to the next clip; the clip pool is every `*.mp4` in `assets/clips/` (decoded once to
+270 × 480, looped), and the visible frame is a deterministic function of the feed seed, the time
+and the swipe count, so the renderer replays exactly what the eyes saw. Ten original 5 s clips
+(neon dance, ocean drone, pottery wheel, latte art, skateboard, cat, city time-lapse, an abstract
+flash clip flagged as *novel*, a sunset hyperlapse and a puppy) were generated for this repo
+with a text-to-video model and are listed with their download URLs in `assets/clips/manifest.json`;
+`python3 src/fetch_clips.py` downloads them (they are not committed, ~2 MB each). No third-party
+footage is used. Without the clips the reels feed shows moving synthetic placeholders (same
+scrolling mechanics, plain colour-field clips), which is what the rendering here used.
 
 ## 8. Reproduce
 
@@ -292,6 +312,12 @@ python3 src/side_eval.py v2_side_real v2_side_shuf
 python3 src/analyze_episode.py final_v2 v2_shuffled      # figures + JSON
 python3 src/render.py --events out/events_final_v2.jsonl --spikes out/spikes_final_v2.npz \
         --positions data/graph/positions.npy --groups data/graph/groups.npy --out out/final.mp4
+# reels variant: pre-generated short clips on both screens (fetch the clips first, or placeholders are used)
+python3 src/fetch_clips.py                                                             # assets/clips/*.mp4
+python3 src/run_episode.py --duration 50 --seed 1 --tag reels_s1 --feed-mode reels
+python3 src/analyze_episode.py reels_s1
+python3 src/render.py --events out/events_reels_s1.jsonl --spikes out/spikes_reels_s1.npz --stats out/summary_reels_s1.json --out out/final_reels.mp4
+# sprites (already committed): python3 src/build_fly_sprite.py ; python3 src/build_device_sprite.py
 # optional, the rejected ridge readout of §5.4:
 python3 src/run_episode.py --mode teacher --duration 100 --teacher-gap 1.0 1.8 --no-spikes --out-dir out/calib
 python3 src/decoder.py fit out/calib/calib.npz out/calib/readout.npz
@@ -307,6 +333,11 @@ walk. Design contract: `docs/ARENA_DESIGN.md`.
 heading noise σ 1.2 rad/s, τ 0.5 s, wall reflection) is *modulated* by the brain: forward speed
 adds 6 mm/s per Hz of descending-neuron population rate; turning adds 3 rad/s × the normalised
 right-minus-left rate of the DNa descending neurons (26 per side; ipsilateral turn as for DNa02).
+Rates are Hz per cell of the 1,304 sided descending neurons (the same count the burst decoder
+uses); the heading noise is integrated with the exact Ornstein–Uhlenbeck update so its standard
+deviation is 1.2 rad/s at any step size. When the descending trace is below 0.05 Hz per cell and
+the fly stands on the phone, the base speed drops to 3 mm/s ("standing on the screen"); the
+population is bursty, so a connected fly is slow for most of its time on the phone.
 The fly is drawn at 10× scale (30 mm body, 22 mm front-leg reach) so that "over a panel" is a
 meaningful event; the README states this scale wherever it matters.
 
@@ -314,7 +345,7 @@ meaningful event; the README states this scale wherever it matters.
 0.03, walls 0.06, bezel 0.15, the two live feeds pasted onto their 79 × 111 mm panels) sampled by
 each eye as a 24 × 18 grid of log-spaced distance (5–300 mm, nearest row lowest in the visual
 field) × 10° azimuth bins over that eye's hemifield. The grid feeds the unchanged retinotopic
-encoder onto the same L1/L2 lamina cells.
+encoder onto the same L1/L2 lamina cells, with the nearest row mapped onto the ventral retina.
 
 **Swipes.** The same burst rule, but a swipe is applied only if that side's front-leg tip is over a
 panel; otherwise it is logged as blocked. Side evidence is near zero in the arena (both eyes see
@@ -334,6 +365,12 @@ Conditions, five seeds each, 120 s:
 | `shuffled` | wiring-shuffled | yes | contact-gated | off |
 | `random` | MaleCNS (logged only) | **no** (baseline walk) | never applied | off |
 
+The `random` body ignores all three descending rates (`Body(connected=False)`): no speed
+modulation, no steering and no standing-still rule, so it is the pure baseline walker (an earlier
+version kept the standing rule, which alone inflated the control's time on the phone). Each run
+draws its brain and body random streams from `SeedSequence(seed).spawn(2)`, so a condition changes
+only the wiring or the coupling, never the noise.
+
 Two caveats found while building it, both properties of the model rather than bugs: under the Shiu
 sign convention dopamine neurons are excitatory, so a PAM pulse recruits most Kenyon cells and the
 depression is only ~7× stimulus-specific rather than clean; and spontaneous PAM spikes cause a slow
@@ -343,45 +380,62 @@ MBON ≈ 8 Hz), so the analysis reports the mushroom-body rates actually reached
 
 ### 9.1 Results (`docs/arena/arena_summary.json`, five seeds × 120 s per condition)
 
-| condition | time on phone | visits | swipes applied | swipes blocked | 1st half → 2nd half | final KC→MBON w/w₀ |
-|---|---|---|---|---|---|---|
-| real | 8 % [1, 16] | 1.2 | 4.0 | 30.6 | 5 % → 10 % | 1.000 |
-| **dopamine** | **12 % [3, 27]** | **2.0** | **6.0** | 30.8 | 6 % → 18 % | **0.989** |
-| shuffled | 6 % [1, 10] | 1.2 | 4.4 | 26.6 | 8 % → 3 % | 1.000 |
-| random walker | 20 % [0, 46] | 1.0 | 0 (never applied) | 34.2 | 19 % → 21 % | 1.000 |
+| condition | time on phone | within reach | visits | swipes applied | swipes blocked | 1st half → 2nd half | final KC→MBON w/w₀ |
+|---|---|---|---|---|---|---|---|
+| real | 15 % [3, 34] | 16 % | 1.4 | 9.2 | 28.6 | 7 % → 22 % | 1.000 |
+| dopamine | 12 % [1, 31] | 15 % | 1.2 | 7.6 | 29.2 | 22 % → 3 % | 0.990 [0.980, 0.998] |
+| shuffled | 0 % [0, 0] | 1 % | 0.0 | 0.2 | 33.2 | 0 % → 0 % | 1.000 |
+| random walker | 7 % [0, 19] | 8 % | 1.0 | 0 (never applied) | 31.2 | 12 % → 1 % | 1.000 |
 
 Brackets are 95 % bootstrap intervals across seeds. Dopamine minus real, paired by seed:
-+4.3 percentage points of time on the phone [−7.6, +18.8], +0.8 visits [+0.2, +1.4], learning
-(second-half minus first-half gain) +6.6 points [−13.5, +30.4]; exact sign-flip p = 0.75 and 0.63.
-Real vs random walker: −12 points, permutation p = 0.45. Real vs shuffled: +2 points, p = 0.70.
+−2.4 percentage points of time on the phone [−29.9, +25.6], −0.2 visits [−1.8, +1.2], learning
+(second-half minus first-half) −34 points [−79, +4], final w/w₀ −0.010 [−0.020, −0.002]; exact
+sign-flip p = 0.63 (time on phone) and 0.38 (learning). Real vs random walker: +7.9 points,
+exact permutation p = 0.48. Real vs shuffled: +14.6 points, p = 0.048 (252 permutations, smallest
+attainable p = 0.008). Mean distance to the phone centre: real and dopamine 140 mm, random walker
+157 mm, shuffled 159 mm. Visits last 20 s on average with the real wiring (dopamine 22 s) against
+7 s for the random walker, whose visits are just transits.
 
-**Honest reading.** With five seeds nothing here is significant, and the direction of the main
-comparison is the opposite of the doomscroll story: the brain-connected fly spends *less* time on
-the phone than the plain random walker. The mechanism is visible in the logs. Far from the phone
-the real brain is silent (a dark static room gives no visual onsets, so no descending activity) and
-the fly is just the baseline walker. When it steps onto the phone and sees the feed cut or scroll,
-the descending burst that triggers a swipe also raises walking speed (the DN → speed mapping,
-inherited from car-driving connectome projects), so the fly tends to run off the screen right after
-touching it. A real fly startled by motion is more likely to stop and orient. Visits that produced
-swipes had a median length of 5–6 s (range 0.5–31 s).
+**Honest reading.** With five seeds nothing between the brain-connected conditions is significant,
+and the distributions are heavy-tailed: one run per condition (real seed 4, 54 %; dopamine seed 3,
+50 %) supplies most of the time on the phone, while three of the five real runs and two of the five
+dopamine runs touch it for less than 6 s. The "learning" columns are those single runs — seed 4 of
+the real condition found the phone in its second half, seed 3 of the dopamine condition in its
+first — so first-half / second-half comparisons mean nothing at this n. What does hold up: the
+brain-connected fly stays closer to the phone than the plain random walker (140 mm vs 157 mm), is
+within reach twice as often (16 % vs 8 %) and, once on it, stays for 20 s instead of 7 s, because
+the swipe-triggering descending bursts also set the walking speed and the quiet phases between
+them slow it to the standing speed. That is "attracted to motion" behaviour of the wiring, not a
+preference, and it is not significant here (p = 0.48).
 
-The dopamine condition is consistently, but not significantly, more "engaged": at least as many visits in
-every seed (strictly more in 3 of 5), more applied swipes, and its time-on-phone rises from the first to the second half while the
-real condition barely changes. The synaptic weights moved by only 1.1 % on average (the reward
-fired 0–4 times per run), so this is an effect of a few rewards on a mostly silent mushroom body
-(KC ≈ 0.27 Hz, MBON ≈ 1.2 Hz; PAM ≈ 0.06 Hz in the conditions without reward drive). Novel-card approach could not be measured:
-almost no novel cuts happened while the fly was off the phone and within 2 s of reaching it.
+The shuffled control is informative in a different way. With the same 89.9 million synapses
+rewired at random, the descending output no longer depends on what the eyes see: every shuffled
+seed shows the same tonic descending rate (0.37 Hz per cell in all five runs, against 0.30–0.50 Hz
+varying with the visual input in the real runs) and the same left–right DNa imbalance
+(0.92 vs 0.82 Hz), i.e. a constant speed and a constant 0.2 rad/s turning bias. The fly circles the
+room along the walls, is within reach of the phone 1 % of the time and never steps on it. The only
+significant contrast in the table, real vs shuffled (p = 0.048), therefore says that with the real
+wiring the descending neurons follow the visual input; it does not say the fly wants the phone.
+
+Dopamine did not change behaviour. KC→MBON weights moved by 1.0 % on average (2.9 % in the run
+with six rewards), and most of that is reward-independent drift: the rule fires on every PAM spike
+and PAM cells fire spontaneously at 0.05–0.10 Hz, so runs with no reward still end at
+w/w₀ ≈ 0.998. The mushroom body is nearly silent throughout (KC 0.25 Hz, MBON 1.1 Hz), so a few
+rewards cannot move it far. Novel-card approach could not be measured: 0–1 novel cuts per run
+happened while the fly was off the phone.
 
 What would make this a real experiment rather than a pilot: (1) a DN → *stop-and-orient* mapping
 (or a data-driven one from DNp09 / DNa-type walking and halting neurons) instead of DN → speed;
-(2) 20+ seeds per condition, since the random walker alone spans 0–65 % time on the phone in five
-seeds; (3) a modulatory (non-spiking-effect) treatment of dopamine synapses, so a PAM pulse rewards
-the active Kenyon cells specifically instead of recruiting most of them; (4) longer runs, because
-learning needs rewards and rewards need visits. The code supports all four; none was tuned here.
+(2) 20+ seeds per condition, since single runs dominate every mean above; (3) a modulatory
+(non-spiking-effect) treatment of dopamine synapses with a reward gate, so a PAM pulse rewards the
+active Kenyon cells specifically instead of drifting on spontaneous PAM spikes; (4) longer runs,
+because learning needs rewards and rewards need visits. The code supports all four; none was tuned
+here.
 
 Figures: `docs/figures/arena_trajectories.png`, `arena_time_on_phone.png`, `arena_distance.png`,
-`arena_w_ratio.png`. Video: `python3 src/render_arena.py --events out/arena_dopamine_s4.jsonl ...`
-(the most eventful run: 5 visits, 17 swipes, 4 rewards, 42 % of the time on the phone).
+`arena_w_ratio.png`. Video: `python3 src/render_arena.py --events out/arena_dopamine_s3.jsonl
+--spikes out/arena_dopamine_s3_spikes.npz` (the most eventful dopamine run: one 60 s visit,
+25 swipes, 6 rewards, 50 % of the time on the phone, w/w₀ 0.971).
 
 ## 10. Attribution (CC-BY)
 
