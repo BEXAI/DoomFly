@@ -151,6 +151,22 @@ def alpha_blit(frame: np.ndarray, bgr: np.ndarray, alpha: np.ndarray, x: int, y:
     roi[:] = (roi.astype(np.float32) * (1.0 - a) + src.astype(np.float32) * a).astype(np.uint8)
 
 
+def alpha_blit_color(frame: np.ndarray, color, alpha: np.ndarray, x: int, y: int, gain: float = 1.0) -> None:
+    """``alpha_blit`` for a solid colour (no (h,w,3) source buffer; the float32 products are the same)."""
+    H, W = frame.shape[:2]
+    h, w = alpha.shape[:2]
+    x0, y0 = max(0, x), max(0, y)
+    x1, y1 = min(W, x + w), min(H, y + h)
+    if x1 <= x0 or y1 <= y0:
+        return
+    sx, sy = x0 - x, y0 - y
+    a = alpha[sy : sy + (y1 - y0), sx : sx + (x1 - x0)].astype(np.float32) * (gain / 255.0)
+    a = a[..., None]
+    roi = frame[y0:y1, x0:x1]
+    col = np.asarray(color, np.uint8).astype(np.float32)[None, None, :]
+    roi[:] = (roi.astype(np.float32) * (1.0 - a) + col * a).astype(np.uint8)
+
+
 def premul_blit(frame: np.ndarray, pm: np.ndarray, alpha: np.ndarray, x: int, y: int) -> None:
     """Composite a premultiplied sprite: out = pm + (1 - alpha) * frame  (``pm``, ``alpha`` uint8)."""
     H, W = frame.shape[:2]
@@ -174,14 +190,34 @@ def fill_panel(frame: np.ndarray, x0: int, y0: int, x1: int, y1: int, r: int, co
     if x1 <= x0 or y1 <= y0 or alpha <= 0:
         return
     roi = frame[y0:y1, x0:x1]
-    over = np.empty_like(roi)
-    over[:] = color
-    mask = rounded_mask(y1 - y0, x1 - x0, r)
+    h, w = y1 - y0, x1 - x0
+    key = (h, w, r)
+    hit = _PANEL_CACHE.get(key)
+    if hit is None:
+        mask = rounded_mask(h, w, r)
+        cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if len(_PANEL_CACHE) > 512:
+            _PANEL_CACHE.clear()
+        hit = _PANEL_CACHE[key] = (mask, cnts)
+    mask, cnts = hit
+    ckey = (h, w, tuple(int(c) for c in color))
+    over = _FILL_CACHE.get(ckey)
+    if over is None:
+        over = np.empty_like(roi)
+        over[:] = color
+        if len(_FILL_CACHE) > 512:
+            _FILL_CACHE.clear()
+        _FILL_CACHE[ckey] = over
     blended = cv2.addWeighted(roi, 1.0 - alpha, over, alpha, 0.0)
     cv2.copyTo(blended, mask, roi)
     if border is not None:
-        cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cv2.drawContours(roi, cnts, -1, border, 2, cv2.LINE_AA)
+
+
+# rounded masks + their contours by (h, w, r), and solid colour blocks by (h, w, colour): the same few
+# panel geometries are drawn every frame
+_PANEL_CACHE: Dict[Tuple[int, int, int], Tuple[np.ndarray, Any]] = {}
+_FILL_CACHE: Dict[Tuple[int, int, Tuple[int, ...]], np.ndarray] = {}
 
 
 class TextRenderer:
@@ -242,9 +278,7 @@ class TextRenderer:
             px -= w // 2
         elif align == "right":
             px -= w
-        bgr = np.empty((h, w, 3), np.uint8)
-        bgr[:] = color
-        alpha_blit(frame, bgr, a, px, py, gain=alpha)
+        alpha_blit_color(frame, color, a, px, py, gain=alpha)
         return w
 
     def wrap(self, text: str, size: float, max_width_design: float, bold: bool = False) -> List[str]:
@@ -397,6 +431,9 @@ def load_events(path: str) -> Tuple[dict, List[dict]]:
             o = json.loads(line)
             if "meta" in o and "step" not in o:
                 meta = o["meta"] or {}
+                continue
+            if "step" not in o:
+                print(f"warning: {path}: skipping a line without 'step': {line[:80]}", file=sys.stderr)
                 continue
             events.append(o)
     events.sort(key=lambda e: e["step"])
@@ -749,6 +786,15 @@ class Fly:
             J = json.load(f)
         if rgba is None or rgba.ndim != 3 or rgba.shape[2] != 4:
             raise RuntimeError(f"cannot read RGBA sprite {FLY_SPRITE_PNG} (run src/build_fly_sprite.py)")
+        missing = [key for key in ("body_length_px", "body_center", "eye_left", "eye_right", "front_leg_attach", "front_leg_rest") if key not in J]
+        for sd in ("left", "right"):
+            if sd not in J.get("front_leg_attach", {}):
+                missing.append(f"front_leg_attach.{sd}")
+            for joint in ("knee", "ankle", "tip"):
+                if joint not in J.get("front_leg_rest", {}).get(sd, {}):
+                    missing.append(f"front_leg_rest.{sd}.{joint}")
+        if missing:
+            raise RuntimeError(f"{FLY_SPRITE_JSON} lacks {missing}; re-run src/build_fly_sprite.py")
         s = FLY_IMAGE_BODY_LEN / float(J["body_length_px"])       # design px per sprite px
         S = s * k                                                   # frame px per sprite px
         bc = np.asarray(J["body_center"], np.float32)
@@ -1249,15 +1295,18 @@ PIP_REGION_GAIN = np.array([0.55, 0.60, 0.62, 0.62, 2.4, 2.8], np.float32)
 PIP_YAW_AMP_DEG = 12.0
 PIP_YAW_PERIOD_S = 20.0
 PIP_YAW_STEP_DEG = 0.25     # cached projection granularity (frames blend between neighbours)
+PIP_CACHE_MAX = int(round(2 * PIP_YAW_AMP_DEG / PIP_YAW_STEP_DEG)) + 2   # every yaw step of one period fits
 PIP_TILT_DEG = 30.0         # dorsal-anterior oblique: brain in front, VNC hanging below/behind
 
 
 class BrainPiP:
     """3D point cloud of soma positions with additive depth-weighted rendering and bloom.
 
-    The static cloud is accumulated per yaw step (0.25 deg) into a cache and blended
-    between neighbouring steps per frame; spikes lift points toward white into a glow
-    buffer with exponential decay (``PIP_DECAY``).
+    The static cloud is accumulated per yaw step (0.25 deg) into a float32 cache (at most
+    ``PIP_CACHE_MAX`` entries, i.e. one full yaw period) and blended between neighbouring
+    steps per frame; the point projections used to deposit spikes are kept only for the
+    two steps around the current yaw.  Spikes lift points toward white into a glow buffer
+    with exponential decay (``PIP_DECAY``).
     """
 
     def __init__(self, positions: Optional[np.ndarray], groups: Optional[np.ndarray], n: int, size: int, k: float):
@@ -1392,7 +1441,7 @@ class BrainPiP:
         return acc.reshape(S, S, 3)
 
     def _base(self, idx: int) -> np.ndarray:
-        """Static cloud for yaw step ``idx`` (cached, float16): fine layer + softer 'near' layer."""
+        """Static cloud for yaw step ``idx`` (cached, float32): fine layer + softer 'near' layer."""
         hit = self._cache.get(idx)
         if hit is not None:
             return hit
@@ -1405,12 +1454,20 @@ class BrainPiP:
         h = cv2.GaussianBlur(h, (0, 0), 1.1 * k)
         near = cv2.resize(h, (S, S), interpolation=cv2.INTER_LINEAR) * 4.0
         base = img + 0.55 * near
-        if len(self._cache) > 120:
+        if len(self._cache) > PIP_CACHE_MAX:
             self._cache.clear()
             self._proj.clear()
         self._cache[idx] = base
         self._proj[idx] = (flat, w)
         return base
+
+    def _proj_for(self, idx: int) -> Tuple[np.ndarray, np.ndarray]:
+        """(flat, w) of yaw step ``idx`` for spike deposits; recomputed when not held for the current steps."""
+        hit = self._proj.get(idx)
+        if hit is None:
+            flat, w, _ = self._project(math.radians(idx * PIP_YAW_STEP_DEG))
+            hit = self._proj[idx] = (flat, w)
+        return hit
 
     # ---- per-frame ---------------------------------------------------------------------
     def yaw_deg(self, t: float) -> float:
@@ -1443,8 +1500,11 @@ class BrainPiP:
             i0 = int(math.floor(f))
             fr = f - i0
             base = cv2.addWeighted(self._base(i0), 1.0 - fr, self._base(i0 + 1), fr, 0.0) if fr > 1e-3 else self._base(i0)
-            # spikes deposit at the nearest cached projection (<= 0.125 deg off, sub-pixel)
-            self.flat, self.w = self._proj[i0 if fr < 0.5 else i0 + 1]
+            # spikes deposit at the nearest step's projection (<= 0.125 deg off, sub-pixel); only the
+            # projections of the two current steps are kept (each is ~1.3 MB for 166k neurons)
+            self.flat, self.w = self._proj_for(i0 if fr < 0.5 else i0 + 1)
+            for key in [kk for kk in self._proj if kk != i0 and kk != i0 + 1]:
+                del self._proj[key]
             img = cv2.add(base, self.glow)  # type: ignore[assignment]
         # two-scale bloom (computed at 1/4 and 1/8 resolution)
         q = cv2.resize(img, (max(S // 4, 8), max(S // 4, 8)), interpolation=cv2.INTER_AREA)
@@ -1506,6 +1566,7 @@ class Renderer:
         self.t_intro_cue = 6.0 * f
         self.t_stats = (D - 12.0 * f, D - 4.0 * f)
         self.t_attrib = (D - 4.0 * f, D)
+        self.fade = max(f, 0.3)      # card fades shrink with the cards (never below 0.3x) so short cards still reach full alpha
 
         # Dynamic state
         self.ev_ptr = 0
@@ -1520,7 +1581,8 @@ class Renderer:
         # whole-episode totals for the stats card (independent of the frame being drawn)
         self.ep_swipes = {"L": sum(1 for e in events if e.get("swipe") == "L"), "R": sum(1 for e in events if e.get("swipe") == "R")}
         self.ep_spikes = int(sum(int(e.get("spikes", 0)) for e in events))
-        self.ep_posts = dict(events[-1].get("posts", {"L": 0, "R": 0})) if events else {"L": 0, "R": 0}
+        last_posts = (events[-1].get("posts") or {}) if events else {}
+        self.ep_posts = {"L": int(last_posts.get("L", 0) or 0), "R": int(last_posts.get("R", 0) or 0)}
         self.ep_steps = len(events)
 
     # ---- event application -------------------------------------------------------------
@@ -1724,12 +1786,13 @@ class Renderer:
                 y += size
 
     def draw_cards(self, frame: np.ndarray, t: float) -> None:
-        a = card_alpha(t, *self.t_title)
+        fi, fo = 0.45 * self.fade, 0.6 * self.fade
+        a = card_alpha(t, *self.t_title, fade_in=fi, fade_out=fo)
         if a > 0:
             # Title sits over the HUD band so the fly and the feeds are visible from frame one.
             self.draw_card(frame, [(TITLE, 68, COL_WHITE, True), ("", 18, COL_WHITE, False), (SUBTITLE, 34, COL_GREY, False)],
                            a, y_center=1585, max_width=980)
-        a = card_alpha(t, *self.t_stats)
+        a = card_alpha(t, *self.t_stats, fade_in=fi, fade_out=fo)
         if a > 0:
             blocks: List[Tuple[str, float, Tuple[int, int, int], bool]] = [
                 (str(self.stats.get("headline", STATS_HEADLINE.format(n=int(self.n_neurons), e=float(self.meta.get("n_edges", 6242085)) / 1e6 if self.meta else 6.24))), 40, COL_WHITE, True), ("", 20, COL_WHITE, False)]
@@ -1737,7 +1800,7 @@ class Renderer:
             for key, val in items:
                 blocks.append((f"{key}: {val}", 34, COL_GREY, False))
             self.draw_card(frame, blocks, a, y_center=1000, max_width=940)
-        a = card_alpha(t, self.t_attrib[0], self.t_attrib[1] + 1.0, fade_out=0.0)
+        a = card_alpha(t, self.t_attrib[0], self.t_attrib[1] + 1.0, fade_in=fi, fade_out=0.0)
         if a > 0:
             self.draw_card(frame, [("CREDITS", 30, COL_GREY, True), ("", 12, COL_WHITE, False), (ATTRIBUTION, 30, COL_WHITE, False)],
                            a, y_center=1000, max_width=960, pad=40)
@@ -1759,11 +1822,15 @@ class Renderer:
         return items
 
     # ---- frame ----------------------------------------------------------------------------
+    def _smooth_readout(self) -> None:
+        """Display smoothing of the DN bars; advanced once per video frame (also for skipped preview frames)."""
+        for side in ("L", "R"):
+            self.readout_disp[side] += (self.readout[side] - self.readout_disp[side]) * 0.45
+
     def render_frame(self, idx: int) -> np.ndarray:
         t = idx / FPS
         self.apply_events(t)
-        for side in ("L", "R"):
-            self.readout_disp[side] += (self.readout[side] - self.readout_disp[side]) * 0.45
+        self._smooth_readout()
         frame = self.bg.copy()
         self.device.draw(frame, self.feed_l.render(), self.feed_r.render())
         self.draw_eye_cues(frame, t)
@@ -1783,14 +1850,32 @@ class Renderer:
         self.feed_l.step(1.0 / FPS)
         self.feed_r.step(1.0 / FPS)
 
+    def parse_stills(self) -> set:
+        """Frame indices of ``--stills``; non-numeric entries and times beyond the render are skipped with a warning."""
+        return parse_stills(self.args.stills, self.n_frames, self.duration)
+
+    def iter_frames(self, stills=frozenset()):
+        """Advance feeds / events / PiP exactly as the video loop does and yield (idx, frame) for every
+        rendered frame (every frame, or every ``frame_step``-th plus the stills in preview)."""
+        for idx in range(self.n_frames):
+            self.step_feeds()
+            if idx == self.n_frames - 1:
+                # the last control step ends inside the final frame: apply it (events with t < n_frames / FPS)
+                self.apply_events(self.n_frames / FPS - 1e-6)
+            if idx % self.frame_step != 0 and idx not in stills:
+                # still advance sim state / event application for skipped frames
+                self.apply_events(idx / FPS)
+                self._smooth_readout()
+                self.pip.decay()
+                continue
+            yield idx, self.render_frame(idx)
+
     def run(self) -> None:
         import imageio.v2 as imageio
         args = self.args
         os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
         out_fps = FPS / self.frame_step
-        stills = set()
-        if args.stills:
-            stills = {int(round(float(s) * FPS)) for s in args.stills.split(",") if s.strip()}
+        stills = self.parse_stills()
         png_dir = args.png_dir
         if png_dir:
             os.makedirs(png_dir, exist_ok=True)
@@ -1802,14 +1887,7 @@ class Renderer:
         print(f"rendering {self.n_frames} frames ({self.duration:.1f} s) at {self.W}x{self.H}, "
               f"writing every {self.frame_step} frame(s) to {args.out}", flush=True)
         try:
-            for idx in range(self.n_frames):
-                self.step_feeds()
-                if idx % self.frame_step != 0 and idx not in stills:
-                    # still advance sim state / event application for skipped frames
-                    self.apply_events(idx / FPS)
-                    self.pip.decay()
-                    continue
-                frame = self.render_frame(idx)
+            for idx, frame in self.iter_frames(stills):
                 if idx in stills:
                     tsec = idx / FPS
                     name = f"render_still_{tsec:g}s.png"
@@ -1830,6 +1908,26 @@ class Renderer:
             writer.close()
         elapsed = time.perf_counter() - t_start
         print(f"wrote {args.out}: {n_written} frames in {elapsed:.1f}s ({n_written / max(elapsed, 1e-6):.1f} fps)")
+
+
+def parse_stills(spec: Optional[str], n_frames: int, duration: float) -> set:
+    """Frame indices for a comma-separated list of video times (s); bad or out-of-range entries warn and are skipped."""
+    stills: set = set()
+    for s in (spec or "").split(","):
+        s = s.strip()
+        if not s:
+            continue
+        try:
+            tsec = float(s)
+        except ValueError:
+            print(f"warning: --stills: ignoring non-numeric entry {s!r}", file=sys.stderr)
+            continue
+        idx = int(round(tsec * FPS))
+        if idx < 0 or idx >= n_frames:
+            print(f"warning: --stills {s} s is outside the rendered {duration:.2f} s; skipped", file=sys.stderr)
+            continue
+        stills.add(idx)
+    return stills
 
 
 def card_alpha(t: float, t0: float, t1: float, fade_in: float = 0.45, fade_out: float = 0.6) -> float:
@@ -1867,7 +1965,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
     ev_path, sp_path, pos_path, grp_path = args.events, args.spikes, args.positions, args.groups
-    missing = [p for p in (ev_path, sp_path, pos_path) if not os.path.exists(p)]
+    missing = [p for p in (ev_path, pos_path) if not os.path.exists(p)]
     if missing:
         if not args.fixture:
             print("missing inputs:\n  " + "\n  ".join(missing) + "\n(pass --fixture to render a synthetic episode)", file=sys.stderr)
@@ -1891,6 +1989,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print("no events", file=sys.stderr)
         return 2
     spikes = load_spikes(sp_path)
+    if spikes is None:
+        print(f"warning: spikes file {sp_path} not found; PiP shows the base cloud only", file=sys.stderr)
     positions = np.load(pos_path) if os.path.exists(pos_path) else None
     groups = np.load(grp_path) if grp_path and os.path.exists(grp_path) else None
     if positions is not None and spikes is not None and positions.shape[0] != spikes["n"]:

@@ -886,32 +886,42 @@ class Feed:
         frame = np.empty((self.out_h, self.out_w, 3), np.uint8)
         frame[:] = self.theme["bg"]
         for i, y in self._reel_visible():
-            panel = self._reel_panel(i)
             ya, yb = max(0, y), min(self.out_h, y + self.out_h)
             if yb > ya:
-                frame[ya:yb] = panel[ya - y : yb - y]
+                frame[ya:yb] = self._reel_panel(i, ya - y, yb - y)
         self._frame = frame
         self._reel_sig = sig
         self._dirty = False
         return frame
 
-    def _reel_panel(self, i: int) -> np.ndarray:
-        """Full panel image for post ``i``: clip frame (cover) + overlay + dynamic bits."""
+    def _reel_panel(self, i: int, ra: int, rb: int) -> np.ndarray:
+        """Rows ``[ra, rb)`` of post ``i``'s panel: clip frame (cover) + overlay + dynamic bits.
+
+        Only the requested rows are resized and blended, so a mid-swipe frame
+        (two partial panels) costs about the same as a resting one.
+        """
         post = self._reel_post(i)
         clip = self._clip_pool()[post["clip"]]
         fi = self._reel_frame_index(i)
         x0, x1, y0, y1 = self._crop
-        src = clip.frames[fi, y0:y1, x0:x1]
-        img: np.ndarray = cv2.resize(src, (self.out_w, self.out_h), interpolation=cv2.INTER_LINEAR)
+        sh = y1 - y0
+        sa = y0 + int(math.floor(ra * sh / self.out_h))
+        sb = y0 + int(math.ceil(rb * sh / self.out_h))
+        src = clip.frames[fi, sa:sb, x0:x1]
+        img: np.ndarray = cv2.resize(src, (self.out_w, rb - ra), interpolation=cv2.INTER_LINEAR)
         assert self._ov_rgb is not None and self._ov_a is not None and self._ov_inv is not None
         for b0, b1 in self._ov_bands:
-            img[b0:b1] = cv2.blendLinear(img[b0:b1], self._ov_rgb[b0:b1], self._ov_inv[b0:b1], self._ov_a[b0:b1])
-        # Avatar fill (per-post accent) and progress-bar fill (per-frame).
-        cv2.circle(img, self._av_c, self._av_r, post["accent"], -1, cv2.LINE_AA)
+            c0, c1 = max(b0, ra), min(b1, rb)
+            if c1 > c0:
+                img[c0 - ra : c1 - ra] = cv2.blendLinear(img[c0 - ra : c1 - ra], self._ov_rgb[c0:c1], self._ov_inv[c0:c1], self._ov_a[c0:c1])
+        # Avatar fill (per-post accent) and progress-bar fill (per-frame); cv2 clips off-band rows.
+        acx, acy = self._av_c
+        if acy + self._av_r >= ra and acy - self._av_r < rb:
+            cv2.circle(img, (acx, acy - ra), self._av_r, post["accent"], -1, cv2.LINE_AA)
         px0, py0, px1, py1 = self._prog
         xe = px0 + int(round((px1 - px0) * (fi + 1) / clip.n_frames))
-        if xe > px0 and py1 > py0:
-            cv2.rectangle(img, (px0, py0), (xe - 1, py1 - 1), (245, 245, 245), -1)
+        if xe > px0 and py1 > py0 and py1 > ra and py0 < rb:
+            cv2.rectangle(img, (px0, py0 - ra), (xe - 1, py1 - 1 - ra), (245, 245, 245), -1)
         return img
 
     def _build_reel_overlay(self) -> None:
@@ -933,27 +943,38 @@ class Feed:
         premul: np.ndarray = np.zeros((H, W, 3), np.float32)
         alpha: np.ndarray = np.zeros((H, W), np.float32)
 
-        def over(mask: np.ndarray, color: Color, a: float) -> None:
-            """Composite a shape (coverage ``mask`` 0..255, ``color``, opacity ``a``) over the layer."""
-            a_s = mask.astype(np.float32) * (a / 255.0)
-            premul[:] = premul * (1.0 - a_s)[..., None] + np.asarray(color, np.float32) * a_s[..., None]
-            alpha[:] = a_s + alpha * (1.0 - a_s)
+        def over(mask: np.ndarray, color: Color, a: float, y0: int = 0, y1: int = H, x0: int = 0, x1: int = W) -> None:
+            """Composite a shape (coverage ``mask`` 0..255, ``color``, opacity ``a``) over the layer.
+
+            Only the ``[y0:y1, x0:x1]`` window is touched (the shape's bounding box).
+            """
+            a_s = mask[y0:y1, x0:x1].astype(np.float32) * (a / 255.0)
+            pm = premul[y0:y1, x0:x1]
+            pm *= (1.0 - a_s)[..., None]
+            pm += np.asarray(color, np.float32) * a_s[..., None]
+            al = alpha[y0:y1, x0:x1]
+            al *= 1.0 - a_s
+            al += a_s
+
+        mk = np.zeros((H, W), np.uint8)   # reusable coverage buffer
 
         def shape(draw, color: Color, a: float, dx: int = 0, dy: int = 0) -> None:  # type: ignore[no-untyped-def]
-            mk = np.zeros((H, W), np.uint8)
             draw(mk, dx, dy)
-            over(mk, color, a)
+            x, y, w_, h_ = cv2.boundingRect(mk)
+            if w_ > 0 and h_ > 0:
+                over(mk, color, a, y, y + h_, x, x + w_)
+                mk[y : y + h_, x : x + w_] = 0
 
         def rr(mk: np.ndarray, x0: int, y0: int, x1: int, y1: int, r: int) -> None:
             """Rounded rectangle ``[x0,x1) x [y0,y1)`` into coverage mask ``mk`` (supersampled px)."""
             if x1 > x0 and y1 > y0:
                 mk[y0:y1, x0:x1] = np.maximum(mk[y0:y1, x0:x1], _rounded_mask(y1 - y0, x1 - x0, r))
 
-        # Bottom and top gradients (black).
+        # Bottom and top gradients (black): on the still-empty layer this is just alpha = g.
         ys = np.arange(H, dtype=np.float32) / max(H - 1, 1)
         g_bot = np.clip((ys - 0.52) / 0.48, 0.0, 1.0) ** 1.6 * 0.78
         g_top = np.clip(1.0 - ys / 0.12, 0.0, 1.0) ** 1.5 * 0.35
-        over(np.broadcast_to((np.maximum(g_bot, g_top) * 255.0)[:, None], (H, W)), (0, 0, 0), 1.0)
+        alpha[:] = np.maximum(g_bot, g_top)[:, None]
 
         m = REEL_MARGIN
         white: Color = (255, 255, 255)

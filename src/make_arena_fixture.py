@@ -3,7 +3,7 @@
 simulation exists (docs/ARENA_DESIGN.md, "Log format").
 
     python3 src/make_arena_fixture.py [--out-dir out] [--conditions real,dopamine,shuffled,random]
-                                      [--seeds 0-4] [--duration 120] [--prefix arena]
+                                      [--seeds 0-4] [--duration 120] [--prefix arena_fixture]
 
 Each run is a correlated random walk in the 400 x 400 mm room with the phone rectangle of the
 contract.  "real" and "dopamine" bias the walk toward the phone and dwell on it; "dopamine"
@@ -12,7 +12,8 @@ lengthens dwells in the second half and decays w_ratio from 1.0 toward 0.6 on re
 non-null (bursts with a null reach are logged as swipe_blocked), novel flags flip randomly,
 posts count up plausibly, pops are Poisson spike counts per control step.
 
-THESE ARE FAKES.  Delete them (rm out/arena_*_s*.jsonl) before running the real simulation.
+THESE ARE FAKES.  The prefix must contain "fixture" (the default writes out/arena_fixture_<cond>_s<seed>.jsonl)
+and an existing file is never overwritten, so the real ``out/arena_<cond>_s<seed>.jsonl`` logs cannot be clobbered.
 """
 from __future__ import annotations
 
@@ -124,6 +125,10 @@ def write_run(cond: str, seed: int, duration: float, out_dir: str, prefix: str) 
     was_on_phone = False
 
     path = os.path.join(out_dir, f"{prefix}_{cond}_s{seed}.jsonl")
+    if "fixture" not in os.path.basename(path):
+        raise ValueError(f"refusing to write a fixture to a real-looking log name: {path} (prefix must contain 'fixture')")
+    if os.path.exists(path):
+        raise FileExistsError(f"refusing to overwrite existing log {path}; delete it first")
     with open(path, "w") as f:
         f.write(json.dumps({"meta": meta_for(cond, seed, duration)}) + "\n")
         for k in range(n_steps):
@@ -251,7 +256,7 @@ def main() -> None:
     ap.add_argument("--conditions", default="real,dopamine,shuffled,random")
     ap.add_argument("--seeds", default="0-4")
     ap.add_argument("--duration", type=float, default=120.0)
-    ap.add_argument("--prefix", default="arena")
+    ap.add_argument("--prefix", default="arena_fixture", help="file prefix; must contain 'fixture'")
     a = ap.parse_args()
     os.makedirs(a.out_dir, exist_ok=True)
     for cond in [c.strip() for c in a.conditions.split(",") if c.strip()]:

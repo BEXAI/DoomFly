@@ -214,6 +214,10 @@ def main() -> int:
     eyes = cv2.morphologyEx(eyes, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
     n, lab, st, cen = cv2.connectedComponentsWithStats(eyes)
     big = sorted(range(1, n), key=lambda i: -st[i, 4])[:2]
+    if len(big) < 2:
+        print(f"eye detection found {len(big)} orange blob(s) in {SRC}; need two compound eyes "
+              "(check the hue/saturation thresholds for this reference image)", file=sys.stderr)
+        return 2
     eye_pts = sorted((tuple(cen[i]) for i in big), key=lambda p: p[0])
     eye_l, eye_r = eye_pts[0], eye_pts[1]
 
