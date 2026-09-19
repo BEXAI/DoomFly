@@ -12,8 +12,10 @@ spikes of real MaleCNS neurons: *a swipe happens when the descending-neuron popu
 and it goes to the side whose medulla saw the change.* What is chosen by hand, and what is
 not, is stated in [§6](#6-what-is-and-is-not-learned-or-fitted).
 
-Deliverables: `out/final.mp4` (rendered from `out/events_final_s4.jsonl` + `out/spikes_final_s4.npz`),
-this README, `docs/` (verified data notes, all test results as JSON, figures).
+Deliverables: the video `out/final.mp4` and its sources `out/events_final_v2.jsonl` +
+`out/spikes_final_v2.npz` are **generated locally** by the commands in §8 (media and logs are
+git-ignored; the video was shared directly). The repository carries the code, this README and
+`docs/`: verified data notes, every test result as JSON, the episode statistics, and figures.
 
 ---
 
@@ -34,11 +36,11 @@ data/raw/*.feather ──► src/build_graph.py ──► data/graph/{W.npz, ids
                                                         ▼
  src/run_episode.py  logs out/events_<tag>.jsonl + out/spikes_<tag>.npz  ──►  src/render.py  ──►  out/final.mp4
  src/validate.py     Tests A–C (Shiu benchmark, runaway, wiring shuffle)
- src/analyze_episode.py  swipe statistics + figure for any episode
+ src/analyze_episode.py  swipe statistics + figure for any episode;  src/side_eval.py  open-loop side test
 ```
 
-Everything ran offline on 4 CPU cores / 15 GB RAM, no GPU. A 50 s episode simulates in ~70 s
-(18 ms per 16 ms control step) and renders in ~100 s (30 fps).
+Everything ran offline on 4 CPU cores / 15 GB RAM, no GPU. A 50 s episode simulates in
+60–80 s (19–26 ms per 16 ms control step, depending on activity) and renders in ~100 s (30 fps).
 
 ## 2. Data
 
@@ -66,7 +68,8 @@ Reference-implementation notes (Shiu constants, sign conventions, licences): `do
 | side | `somaSide` → `rootSide` (sensory cells) → `instance` suffix `_L/_R` |
 | soma positions | `somaLocation` × 8 nm for 139,662 cells; 26,236 more filled by the mean of synaptic partners (4 rounds); 802 unknown |
 
-These match the community builds: hotocoo/malecns reports 166,700 neurons and 6,242,118 edges (89.86 M synapses); the 33-edge difference is exactly the self-edges dropped here.
+These match the community builds: hotocoo/malecns reports 166,700 neurons and 6,242,118 edges
+(89.86 M synapses); the 33-edge difference is exactly the self-edges dropped here.
 
 ### Neuron sets (`data/graph/sets.json`)
 
@@ -87,9 +90,9 @@ These match the community builds: hotocoo/malecns reports 166,700 neurons and 6,
 
 Caveats found in the data: the left eye is under-reconstructed (R1–R6 photoreceptors 1,112 L vs
 2,265 R; `L3`/`C2`/`Tm4` have column coordinates only on the right), so drive is injected at
-L1/L2 (complete on both sides) and never at photoreceptors (histamine sign trap). MaleCNS has
-**no sugar/bitter GRN label**; the LB3/LB1 split is a connectivity proxy (strongest two-hop path to
-MN9), so Test A is reported with that caveat.
+**L1/L2 only** (complete on both sides: 1,749 cells left, 1,785 right) and never at photoreceptors
+(histamine sign trap) or L3. MaleCNS has **no sugar/bitter GRN label**; the LB3/LB1 split is a
+connectivity proxy (strongest two-hop path to MN9), so Test A is reported with that caveat.
 
 ## 3. Neuron model (`src/sim.py`)
 
@@ -121,7 +124,8 @@ glyphs, no logos, no real posts). Image cards and "novel" high-contrast cards **
 muted clips they cut to a new brightness level about once a second (period and phase fixed per
 card, ±80 % for image cards, ±60 % for novel cards). Between cuts the frame is static. This is the
 ambient stimulus — a property of the content, not of the brain. A swipe flicks the feed by 0.55
-screen heights with an ease-out over 350 ms.
+screen heights with an ease-out over 350 ms. The renderer replays the feeds from the seeds and
+autoplay parameters recorded in the episode's meta line, so no frames are stored.
 
 **Encoder (`src/encoder.py`).** Each panel → 24 × 18 luminance grid. The ~875 L1 and ~875 L2
 columns of each eye carry MaleCNS hex coordinates (`assignedOlHex1/2`); axial → cartesian
@@ -143,12 +147,15 @@ cannot pick a panel) and `ridge` (hotocoo-style linear readout fitted to a teach
 
 ## 5. Results
 
-All numbers below are printed from `docs/validate_results.json`, `docs/episode_*.json`,
-`docs/side_eval_open_loop.txt` and `docs/ridge_fit_diag.json`.
+All numbers below are printed from `docs/validate_results.json`, `docs/episodes/*.json`,
+`docs/probes/*.json` and `docs/ridge_fit_diag.json`. An earlier set of runs drove the right eye's
+L3 cells as well (a code default; the left eye has no L3 columns); that asymmetry was found in
+audit and removed, and every episode number below is from the corrected L1/L2-only runs.
 
 ### 5.1 Test A — Shiu benchmark (sugar → MN9), `src/validate.py`
 
-Tests A–C run **without** short-term depression (it was added after them, for the closed loop); the depression regime is characterised by the closed-loop probes in §5.2.
+Tests A–C run **without** short-term depression (it was added after them, for the closed loop);
+the depression regime is characterised by the closed-loop probes in §5.2.
 
 78 sugar-proxy GRNs at 150 Hz for 1 s; MN9 rate (Hz per cell) during the drive; baseline 0 Hz.
 
@@ -167,18 +174,19 @@ consistency check, not a reproduction of Shiu's exact experiment. Figure: `docs/
 ### 5.2 Test B — runaway, silence, and the operating point
 
 * No input, 1 s: **0 spikes** at every configuration (no noise term).
-* Left-eye drive (all 1,770 left L1+L2 cells at 60 Hz, 1.5 s), no depression: population rate 26 Hz at scale 1.0,
-  15.6 Hz at 0.5 (both latched, persisting after the drive stops); ≤ 1.2 Hz and dying instantly
-  at ≤ 0.4. The cliff is between 0.4 and 0.5. But at ≤ 0.4 **nothing leaves the optic lobe**
-  (VPN 0.02 Hz, DN 0.00 Hz, motor 0).
-* Closed-loop probes (8 s, swipes as stimulus): 0.2 → activity stays in the optic lobe; 0.25–0.3 →
-  the network latches into a 4 Hz self-sustained state after the first swipe, in which descending
-  activity is constant and input-blind.
+* Left-eye drive (all 1,770 left L1+L2 cells at 60 Hz, 1.5 s), no depression: population rate
+  26 Hz at scale 1.0, 15.6 Hz at 0.5 (both latched, persisting after the drive stops); ≤ 1.2 Hz and
+  dying instantly at ≤ 0.4. The cliff is between 0.4 and 0.5. But at ≤ 0.4 **nothing leaves the
+  optic lobe** (VPN 0.02 Hz, DN < 0.01 Hz, motor 0).
+* Closed-loop probes (8 s, swipes as stimulus; `docs/probes/closed_loop_probes.json`): at 0.2 the
+  activity stays in the optic lobe; at 0.25–0.3 the network latches after the first swipe into a
+  3–4 Hz self-sustained state in which descending activity is constant (≈ 120 DN spikes per step
+  before and after a swipe alike) and input-blind.
 * **With global short-term depression** (U = 0.15) at scale 0.5 (+ adapt 0.6): no latch;
-  descending neurons are silent between events and burst on each visual onset (62 DN spikes/step
-  in the 300 ms after a swipe vs 8 before; 0 in quiet periods). U = 0.08 at 0.5 still latched. This
-  is the operating point used everywhere below. Mean population rate in the episodes: 0.4–0.6 Hz;
-  DN rate at swipe 7.7–9.2 Hz per cell vs 1.5–2.5 Hz one second earlier.
+  descending neurons are silent between events and burst on each visual onset (62 DN spikes per
+  step in the 300 ms after a swipe vs 8 before; 0 in quiet periods). U = 0.08 at 0.5 still latched
+  (162 vs 131). This is the operating point used everywhere below. Mean population rate in the
+  50 s episodes: 0.33–0.67 Hz; DN rate at swipe 7.9–10.7 Hz per cell vs 1.3–2.4 Hz one second earlier.
 
 Figure: `docs/figures/validate_B_lateral.png`.
 
@@ -189,53 +197,50 @@ index +0.99 on the real graph; on the wiring-shuffled graph (same weights and si
 targets permuted) L 41.6 vs R 46.6 Hz, index −0.06, and the shuffled graph runs away (53 Hz) where the
 real one is quiet.
 
-*One-sided probes at the operating point* (`out/events_lat_L/R.jsonl`): left-only swipes give
-55,000 left-eye spikes and **0** right-eye spikes per event; descending neurons are silent before
-and fire ~1,800 spikes in the 600 ms after; the first visual-projection spikes are ipsilateral for
-~50 ms, then the response is bilateral with a right bias (the right optic lobe is better
-reconstructed and carries more synapses).
-
-*Open-loop side test* (scripted swipes, 15 s left-only then 15 s right-only, decoder only logs
-what it would do; `docs/side_eval_open_loop.txt`):
+*Open-loop side test* (`src/side_eval.py`; scripted swipes, 15 s left-only then 15 s right-only, the
+decoder only logs what it would do; `docs/episodes/side_eval_open_loop.txt`):
 
 | graph | left block | right block | overall |
 |---|---|---|---|
-| **real wiring** | 10 / 12 | 13 / 13 | **23 / 25 = 92 %** |
-| shuffled wiring | 0 / 19 | 13 / 13 | 13 / 32 = 41 % |
+| **real wiring** | 10 / 11 | 13 / 13 | **23 / 24 = 96 %** |
+| shuffled wiring | 1 / 18 | 13 / 13 | 14 / 31 = 45 % |
 
-*Closed loop on the shuffled graph* (`docs/episode_shuffled.json`): it still bursts (35 swipes),
-but every one of them goes right (0 L / 35 R, posts 0 / 55): the shuffled brain can be startled
-but does not know which eye saw the change.
+*Closed loop on the shuffled graph* (`docs/episodes/episode_v2_shuffled.json`): it still bursts
+(35 swipes), but every one of them goes right (0 L / 35 R, posts 0 / 55): the shuffled brain can be
+startled but does not know which eye saw the change.
 
 ### 5.4 The fitted readout is a negative result
 
 A ridge readout from 2 × 2,129 DN + MN traces (fast 80 ms, slow 800 ms) to a teacher that swiped
 each panel at random 1–1.8 s intervals (100 s, 138 teacher swipes, λ chosen on held-out blocks)
-reaches held-out correlation **0.02 (L) / 0.06 (R)** (`docs/ridge_fit_diag.json`). The
-descending/motor state does not encode "how long ago was this panel still", so this readout was
-dropped rather than tuned.
+reaches held-out correlation **0.02 (L) / 0.06 (R)** (`docs/ridge_fit_diag.json`; run before the L3
+fix, not repeated). The descending/motor state does not encode "how long ago was this panel still",
+so this readout was dropped rather than tuned.
 
-### 5.5 The episode (`docs/episode_final_s4.json`, video)
+### 5.5 The episode (`docs/episodes/episode_v2_s1.json`, video)
 
 Six 50 s runs at the operating point, differing only in the Poisson seed:
 
-| seed | swipes | L / R | longest quiet gap | side = eye that saw the onset¹ | DN at swipe vs 1 s before |
-|---|---|---|---|---|---|
-| 0 | 13 | 9 / 4 | 19.5 s | 85 % | 9.1 / 1.7 Hz |
-| 1 | 17 | 7 / 10 | 17.5 s | 82 % | 7.7 / 2.0 Hz |
-| 2 | 18 | 14 / 4 | 14.4 s | 83 % | 8.2 / 2.5 Hz |
-| 3 | 8 | 0 / 8 | 34.2 s | 75 % | 8.5 / 1.5 Hz |
-| **4 (video)** | **29** | **9 / 20** | **4.3 s** | 72 % | 9.2 / 2.1 Hz |
-| 5 | 13 | 9 / 4 | 12.4 s | 100 % | 8.0 / 1.8 Hz |
+| seed | swipes | L / R | longest quiet gap | side = eye that saw the onset¹ | DN at swipe vs 1 s before | mean rate |
+|---|---|---|---|---|---|---|
+| 0 | 27 | 9 / 18 | 5.4 s | 67 % | 8.6 / 1.5 Hz | 0.67 Hz |
+| **1 (video)** | **28** | **14 / 14** | **5.2 s** | **96 %** | 7.9 / 2.4 Hz | 0.62 Hz |
+| 2 | 27 | 2 / 25 | 6.0 s | 81 % | 9.3 / 1.3 Hz | 0.57 Hz |
+| 3 | 17 | 1 / 16 | 11.7 s | 76 % | 10.1 / 2.1 Hz | 0.49 Hz |
+| 4 | 9 | 0 / 9 | 28.1 s | 89 % | 8.1 / 1.6 Hz | 0.35 Hz |
+| 5 | 9 | 0 / 9 | 33.4 s | 100 % | 10.7 / 1.4 Hz | 0.33 Hz |
 
-¹ fraction of swipes whose panel had the larger eye drive in the preceding 250 ms; confounded in
-closed loop because the swipe itself is the strongest onset, hence the open-loop test in §5.3.
+¹ fraction of swipes whose panel had the larger eye drive in the preceding 256 ms (ties do not
+count); confounded in closed loop because the swipe itself is the strongest onset, hence the
+open-loop test in §5.3.
 
-Seed 4 was chosen for the video because it covers both panels with no long pause; the dynamics
-are the same in all six (bursts locked to onsets, swipe chains of 2–3 at 0.4 s spacing, then
-habituation until the next autoplay cut ignites a burst). The right bias is real wiring asymmetry.
-Video episode: 29 swipes (9 L / 20 R), 11 / 32 posts consumed, 4.6 M spikes, 0.61 Hz mean rate,
-front-leg MNs fire 55 (L) / 36 (R) spikes per swipe. Figure: `docs/figures/episode_final_s4.png`.
+Seed 1 was chosen for the video because it covers both panels evenly with no long pause; the
+dynamics are the same in all six (bursts locked to onsets, swipe chains of 2–3 at 0.4 s spacing,
+then habituation until the next autoplay cut ignites a burst). Most seeds still favour the right
+panel: whichever panel ignites first gets swiped, swipes are the strongest onsets, and the right
+optic lobe of this reconstruction ignites bursts more readily. Video episode: 28 swipes (14 L / 14 R),
+20 / 23 posts consumed, 5.1 M spikes, 0.62 Hz mean rate, front-leg MNs fire 60 (L) / 40 (R)
+spikes in the 0.5 s after a swipe. Figure: `docs/figures/episode_v2_s1.png`.
 
 ## 6. What is and is not learned or fitted
 
@@ -243,8 +248,8 @@ front-leg MNs fire 55 (L) / 36 (R) spikes per swipe. Figure: `docs/figures/episo
   model, the retinotopic input map (real hex column coordinates), which cells are driven (L1/L2),
   which cells are read (all descending neurons; medulla per side), the swipe rule.
 - **Chosen by hand (and reported):** `weight_scale` 0.5, adaptation 0.6 mV, STD U 0.15 / 480 ms,
-  encoder gain 6 and 150 Hz cap, DN threshold 1.5 Hz, side-trace 0.8 s, refractory 0.4 s / 0.3 s,
-  autoplay amplitude and rate, the seed shown.
+  encoder gain 6 and 150 Hz cap, DN threshold 1.5 Hz, side-trace 0.8 s, refractory 0.4 s / 0.3 s
+  and 1 s warm-up, autoplay amplitude and rate, the seed shown.
 - **Fitted:** nothing in the video pipeline. (The ridge readout in §5.4 was fitted and rejected.)
 - **Stimulus design:** the feeds autoplay. Without any change on the screens the brain is silent
   (Test B), so the loop needs content that moves, exactly like real feeds.
@@ -257,10 +262,11 @@ Pure OpenCV/numpy compositing at 1080 × 1920, 60 fps (≈ 30 fps render): dark 
 device mock-up (two 1335 × 1878 portrait panels, crease, titanium bevel, **no logo, no real UI**), a
 stylised top-down Drosophila perched over the hinge whose front-left / front-right leg flicks on each
 swipe, eye → panel glow cues in the intro, a 400 × 400 PiP of the 165,898 soma positions (L eye cyan,
-R eye orange, DNs green, front-leg MNs magenta) lit frame-accurately by `spikes_final_s4.npz`, a HUD
-with the descending-neuron burst signal, posts consumed L / R, swipes, spikes/s with a sparkline,
-title card (0–4 s), stats card (38–46 s) and attribution card (46–50 s). Feed frames are replayed
-deterministically from the swipe times in `events_final_s4.jsonl` (same seeds and autoplay schedule).
+R eye orange, DNs green, front-leg MNs magenta; the volume's x axis is mirrored so the fly's left
+lobe is on the viewer's left, like the head-up fly) lit frame-accurately by the spike file, a HUD
+with the descending-neuron rate per side against its 1.5 Hz threshold, posts consumed L / R, swipes,
+spikes/s with a sparkline, title card (0–4 s), stats card (38–46 s) and attribution card (46–50 s).
+Feed frames are replayed deterministically from the swipe times and meta line in the events log.
 
 ## 8. Reproduce
 
@@ -271,15 +277,17 @@ pip install numpy scipy pandas pyarrow pillow opencv-python-headless matplotlib 
 python3 src/download.py                                  # ~1.1 GB
 python3 src/build_graph.py                               # ~3 min, peaks ~8 GB RAM
 python3 src/validate.py --quick                          # Tests A-C -> out/validate_results.json + figures
-python3 src/run_episode.py --duration 50 --seed 4 --tag final_s4          # the episode (burst mode is the default)
-python3 src/run_episode.py --duration 50 --tag shuffled --shuffle 0 --no-spikes   # wiring-shuffled control
-python3 src/run_episode.py --duration 30 --tag side_real --no-spikes --scripted L:15,R:15   # open-loop side test
-python3 src/analyze_episode.py final_s4 shuffled          # figures + JSON
+python3 src/run_episode.py --duration 50 --seed 1 --tag final_v2                      # the episode (burst mode is the default)
+python3 src/run_episode.py --duration 50 --tag v2_shuffled --shuffle 0 --no-spikes    # wiring-shuffled control
+python3 src/run_episode.py --duration 30 --tag v2_side_real --no-spikes --scripted L:15,R:15 --teacher-gap 1.2 2.0             # open-loop side test
+python3 src/run_episode.py --duration 30 --tag v2_side_shuf --no-spikes --scripted L:15,R:15 --teacher-gap 1.2 2.0 --shuffle 0
+python3 src/side_eval.py v2_side_real v2_side_shuf
+python3 src/analyze_episode.py final_v2 v2_shuffled      # figures + JSON
+python3 src/render.py --events out/events_final_v2.jsonl --spikes out/spikes_final_v2.npz \
+        --positions data/graph/positions.npy --groups data/graph/groups.npy --out out/final.mp4
 # optional, the rejected ridge readout of §5.4:
 python3 src/run_episode.py --mode teacher --duration 100 --teacher-gap 1.0 1.8 --no-spikes --out-dir out/calib
 python3 src/decoder.py fit out/calib/calib.npz out/calib/readout.npz
-python3 src/render.py --events out/events_final_s4.jsonl --spikes out/spikes_final_s4.npz \
-        --positions data/graph/positions.npy --groups data/graph/groups.npy --out out/final.mp4
 ```
 
 ## 9. Attribution (CC-BY)

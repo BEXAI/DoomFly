@@ -19,8 +19,13 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def load(tag: str, out_dir: str):
     lines = [json.loads(l) for l in open(os.path.join(out_dir, f"events_{tag}.jsonl"))]
-    meta = lines[0].get("meta", {})
-    return meta, lines[1:]
+    if lines and "meta" in lines[0] and "step" not in lines[0]:
+        meta, ev = lines[0]["meta"], lines[1:]
+    else:
+        meta, ev = {}, lines
+    if not ev:
+        raise SystemExit(f"events_{tag}.jsonl contains no control steps")
+    return meta, ev
 
 
 def analyse(tag: str, out_dir: str = os.path.join(ROOT, "out")) -> dict:
@@ -31,16 +36,18 @@ def analyse(tag: str, out_dir: str = os.path.join(ROOT, "out")) -> dict:
     dn = np.array([e["pops"]["dn_L"] + e["pops"]["dn_R"] for e in ev], float)
     leg = {p: np.array([e["pops"]["leg_" + p] for e in ev], float) for p in "LR"}
     tot = np.array([e["spikes"] for e in ev], float)
-    n_dn = 1314
+    n_dn = int(meta.get("n_dn", 1314))
+    leg_n = meta.get("leg_pool", {"L": 68, "R": 67})
+    dt_sim = float(meta.get("lif", {}).get("dt_ms", 2.0)) / 1000.0
     dn_hz = dn / n_dn / dt
     swipes = [(e["t"], e["swipe"], i) for i, e in enumerate(ev) if e["swipe"]]
 
-    # side check: did the swipe go to the eye with more input in the preceding 250 ms?
+    # side check: did the swipe go to the eye with more input in the preceding 256 ms (16 steps)?
     match = []
     for ts, side, i in swipes:
-        w = slice(max(0, i - 15), i + 1)
-        L, R = eyeL[w].mean(), eyeR[w].mean()
-        match.append((side == "L") == (L > R))
+        w = slice(max(0, i - 16), i)
+        L, R = (eyeL[w].mean(), eyeR[w].mean()) if i > 0 else (0.0, 0.0)
+        match.append(L != R and (side == "L") == (L > R))   # a tie never counts as a match
     # burst -> swipe latency: for each swipe, time since DN rate last crossed 20% of its peak
     # DN response around swipes
     lags = np.arange(-25, 40)
@@ -56,7 +63,7 @@ def analyse(tag: str, out_dir: str = os.path.join(ROOT, "out")) -> dict:
         median_gap_s=float(np.median(gaps)) if gaps.size else None,
         chains_gap_lt_0p6s=int((gaps < 0.6).sum()) if gaps.size else 0,
         posts=ev[-1]["posts"], total_spikes=int(tot.sum()),
-        mean_pop_rate_hz=float(tot.sum() / len(ev) / meta.get("substeps", 8) / meta.get("n_neurons", 166700) / 0.002),
+        mean_pop_rate_hz=float(tot.sum() / len(ev) / meta.get("substeps", 8) / meta.get("n_neurons", 166700) / dt_sim),
         dn_rate_hz_mean=float(dn_hz.mean()), dn_rate_hz_peak=float(dn_hz.max()),
         dn_rate_at_swipe_hz=float(np.nanmean(dn_around[:, lags == 0])) if swipes else None,
         dn_rate_1s_before_swipe_hz=float(np.nanmean(dn_around[:, (lags >= -25) & (lags < -19)])) if swipes else None,
@@ -75,8 +82,8 @@ def analyse(tag: str, out_dir: str = os.path.join(ROOT, "out")) -> dict:
     if meta.get("burst_hz"):
         ax[1].axhline(meta["burst_hz"], color="w", ls=":", lw=0.8, label="swipe threshold")
     ax[1].set_ylabel("DN rate"); ax[1].legend(loc="upper right", fontsize=8)
-    ax[2].plot(t, leg["L"] / dt / 68, color="#25c9e8", lw=0.8, label="front-left leg MNs (Hz/cell)")
-    ax[2].plot(t, leg["R"] / dt / 67, color="#ff9c3a", lw=0.8, label="front-right leg MNs")
+    ax[2].plot(t, leg["L"] / dt / max(1, int(leg_n["L"])), color="#25c9e8", lw=0.8, label="front-left leg MNs (Hz/cell)")
+    ax[2].plot(t, leg["R"] / dt / max(1, int(leg_n["R"])), color="#ff9c3a", lw=0.8, label="front-right leg MNs")
     ax[2].set_ylabel("leg MN rate"); ax[2].legend(loc="upper right", fontsize=8)
     for ts_, side, _ in swipes:
         for a in ax[:3]:

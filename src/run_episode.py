@@ -131,7 +131,8 @@ def main():
                           readout_cells=int(readout_cells.size), grid=list(args.grid), rate_max=args.rate_max, tonic_hz=args.tonic_hz, burst_hz=args.burst_hz, autoplay=bool(args.autoplay), autoplay_amp=args.autoplay_amp, autoplay_hz=args.autoplay_hz, autoplay_whole=bool(args.autoplay_whole), enc_gain=args.enc_gain,
                           l3_gain=args.l3_gain, seed=args.seed, refractory_s=args.refractory, global_refractory_s=dcfg.global_refractory_s, warmup_s=dcfg.warmup_s,
                           tau_side_s=args.tau_side, scripted=args.scripted, teacher_gap=list(args.teacher_gap), teacher_panels=args.teacher_panels,
-                          driven_cells={"L": int(n_drv_L), "R": int(n_drv_R)}))
+                          driven_cells={"L": int(n_drv_L), "R": int(n_drv_R)}, n_dn=int(dcfg.n_dn),
+                          leg_pool={"L": int(pool_masks["L"].sum()), "R": int(pool_masks["R"].sum())}))
     ev.write(json.dumps(meta) + "\n")
 
     X, Y = [], []

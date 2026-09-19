@@ -1,0 +1,30 @@
+{
+ "mode": "teacher",
+ "duration": 8.0,
+ "swipes": {
+  "L": 6,
+  "R": 6
+ },
+ "posts": {
+  "L": 7,
+  "R": 9
+ },
+ "total_spikes": 1137481,
+ "mean_pop_rate_hz": 0.8529401619676065,
+ "wall_s": 7.3905415534973145,
+ "ms_per_control_step": 14.781083106994629,
+ "events": "/home/user/DoomFly/out/events_std_0.5_0.15.jsonl",
+ "pop_rates_hz": {
+  "eye_L": 25.29265536723164,
+  "eye_R": 27.47156862745098,
+  "ol_L": 1.1792123433541821,
+  "ol_R": 1.38323455219216,
+  "vpn_L": 0.02481477446066681,
+  "vpn_R": 0.036345403295750214,
+  "dn_L": 0.9207317073170732,
+  "dn_R": 1.0505401234567902,
+  "leg_L": 0.5735294117647058,
+  "leg_R": 0.3451492537313433
+ },
+ "calib": "/home/user/DoomFly/out/calib.npz"
+}

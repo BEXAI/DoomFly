@@ -88,7 +88,7 @@ GROUP_NAMES = {1: "eye L", 2: "eye R", 3: "descending", 4: "leg motor"}
 
 TITLE = "A fly brain doomscrolls two feeds at once"
 SUBTITLE = "MaleCNS v1.0 connectome · spiking simulation · nothing scripted"
-STATS_HEADLINE = "166,691 neurons · 6.2 M connections (≥5 synapses) · 0 lines of hand-written behaviour"
+STATS_HEADLINE = "{n:,} neurons · {e:.2f} M connections (≥5 synapses) · 0 lines of hand-written behaviour"
 ATTRIBUTION = (
     "Connectome: MaleCNS v1.0 — HHMI Janelia FlyEM, Cambridge Drosophila Connectomics Group, "
     "Google Research. CC-BY 4.0. male-cns.janelia.org — Berg et al., Cell (2026). "
@@ -868,7 +868,7 @@ class Renderer:
         dur = ev_end if args.duration is None else min(args.duration, ev_end)
         self.duration = max(dur, 0.5)
         self.n_frames = int(round(self.duration * FPS))
-        self.n_neurons = spikes["n"] if spikes else (positions.shape[0] if positions is not None else 166691)
+        self.n_neurons = spikes["n"] if spikes else (positions.shape[0] if positions is not None else 166700)
 
         seed_l = int(meta.get("seed_l", 1)) if meta else 1
         seed_r = int(meta.get("seed_r", 2)) if meta else 2
@@ -904,6 +904,11 @@ class Renderer:
         self.total_spikes = 0
         self.total_swipes = {"L": 0, "R": 0}
         self.last_step = -1
+        # whole-episode totals for the stats card (independent of the frame being drawn)
+        self.ep_swipes = {"L": sum(1 for e in events if e.get("swipe") == "L"), "R": sum(1 for e in events if e.get("swipe") == "R")}
+        self.ep_spikes = int(sum(int(e.get("spikes", 0)) for e in events))
+        self.ep_posts = dict(events[-1].get("posts", {"L": 0, "R": 0})) if events else {"L": 0, "R": 0}
+        self.ep_steps = len(events)
 
     # ---- event application -------------------------------------------------------------
     def apply_events(self, t: float) -> None:
@@ -992,9 +997,13 @@ class Renderer:
             y0 = 178 + i * 74
             colr = COL_L if side == "L" else COL_R
             v = self.readout_disp[side]
-            frac = clamp((v + 1.0) / 5.0, 0.0, 1.0)
+            thr = float(self.meta.get("burst_hz", 0) or 0) if self.meta else 0.0
+            frac = clamp(v / (3.0 * thr), 0.0, 1.0) if thr > 0 else clamp((v + 1.0) / 5.0, 0.0, 1.0)
             x0, x1 = 88, 596
             fill_panel(frame, int(x0 * self.k), int(y0 * self.k), int(x1 * self.k), int((y0 + 44) * self.k), int(12 * self.k), (30, 30, 36), 0.9)
+            if thr > 0:   # threshold tick at one third of the bar
+                xt = int((x0 + 4 + (x1 - x0 - 8) / 3.0) * self.k)
+                cv2.line(frame, (xt, int((y0 + 6) * self.k)), (xt, int((y0 + 38) * self.k)), (120, 120, 130), max(1, int(2 * self.k)), cv2.LINE_AA)
             w = int((x1 - x0 - 8) * frac)
             if w > 4:
                 age = t - self.swipe_time[side]
@@ -1102,7 +1111,7 @@ class Renderer:
         a = card_alpha(t, *self.t_stats)
         if a > 0:
             blocks: List[Tuple[str, float, Tuple[int, int, int], bool]] = [
-                (str(self.stats.get("headline", STATS_HEADLINE)), 40, COL_WHITE, True), ("", 20, COL_WHITE, False)]
+                (str(self.stats.get("headline", STATS_HEADLINE.format(n=int(self.n_neurons), e=float(self.meta.get("n_edges", 6242085)) / 1e6 if self.meta else 6.24))), 40, COL_WHITE, True), ("", 20, COL_WHITE, False)]
             items = self.stats_items()
             for key, val in items:
                 blocks.append((f"{key}: {val}", 34, COL_GREY, False))
@@ -1119,13 +1128,13 @@ class Renderer:
                 continue
             items.append((str(key), f"{val:,}" if isinstance(val, (int, float)) and not isinstance(val, bool) else str(val)))
         if not any(k.lower().startswith("total swipes") for k, _ in items):
-            items.append(("total swipes", f"{self.total_swipes['L'] + self.total_swipes['R']:,}  (L {self.total_swipes['L']} · R {self.total_swipes['R']})"))
+            items.append(("total swipes", f"{self.ep_swipes['L'] + self.ep_swipes['R']:,}  (L {self.ep_swipes['L']} · R {self.ep_swipes['R']})"))
         if not any(k.lower().startswith("total spikes") for k, _ in items):
-            items.append(("total spikes", f"{self.total_spikes:,}"))
+            items.append(("total spikes", f"{self.ep_spikes:,}"))
         if not any(k.lower().startswith("posts") for k, _ in items):
-            items.append(("posts scrolled", f"L {self.posts['L']} · R {self.posts['R']}"))
+            items.append(("posts scrolled", f"L {self.ep_posts['L']} · R {self.ep_posts['R']}"))
         if not any(k.lower().startswith("simulated") for k, _ in items):
-            items.append(("simulated time", f"{(self.last_step + 1) * CTRL_DT:.1f} s of brain time"))
+            items.append(("simulated time", f"{self.ep_steps * CTRL_DT:.1f} s of brain time"))
         return items
 
     # ---- frame ----------------------------------------------------------------------------
@@ -1267,6 +1276,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.stats:
         with open(args.stats) as f:
             stats = json.load(f)
+        if not isinstance(stats, dict):
+            sys.exit(f"--stats must be a JSON object of label -> value, got {type(stats).__name__}")
     r = Renderer(args, meta, events, spikes, positions, groups, stats)
     r.run()
     return 0

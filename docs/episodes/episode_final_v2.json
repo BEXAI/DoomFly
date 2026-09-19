@@ -1,0 +1,205 @@
+{
+ "tag": "final_v2",
+ "duration": 50.0,
+ "n_swipes": 28,
+ "swipes_L": 14,
+ "swipes_R": 14,
+ "swipe_times": [
+  [
+   4.256,
+   "R"
+  ],
+  [
+   7.632,
+   "R"
+  ],
+  [
+   8.56,
+   "R"
+  ],
+  [
+   11.568,
+   "R"
+  ],
+  [
+   11.968,
+   "R"
+  ],
+  [
+   14.0,
+   "R"
+  ],
+  [
+   14.4,
+   "R"
+  ],
+  [
+   16.592,
+   "R"
+  ],
+  [
+   16.992,
+   "R"
+  ],
+  [
+   17.408,
+   "R"
+  ],
+  [
+   19.424,
+   "R"
+  ],
+  [
+   19.824,
+   "R"
+  ],
+  [
+   20.24,
+   "R"
+  ],
+  [
+   21.648,
+   "R"
+  ],
+  [
+   26.8,
+   "L"
+  ],
+  [
+   27.216,
+   "L"
+  ],
+  [
+   27.632,
+   "L"
+  ],
+  [
+   30.64,
+   "L"
+  ],
+  [
+   32.56,
+   "L"
+  ],
+  [
+   34.448,
+   "L"
+  ],
+  [
+   34.864,
+   "L"
+  ],
+  [
+   35.664,
+   "L"
+  ],
+  [
+   37.616,
+   "L"
+  ],
+  [
+   38.032,
+   "L"
+  ],
+  [
+   41.056,
+   "L"
+  ],
+  [
+   45.648,
+   "L"
+  ],
+  [
+   46.656,
+   "L"
+  ],
+  [
+   47.056,
+   "L"
+  ]
+ ],
+ "side_matches_eye_onset": 26,
+ "side_match_fraction": 0.9285714285714286,
+ "median_gap_s": 1.0079999999999956,
+ "chains_gap_lt_0p6s": 11,
+ "posts": {
+  "L": 20,
+  "R": 23
+ },
+ "total_spikes": 5149198,
+ "mean_pop_rate_hz": 0.6177802039592081,
+ "dn_rate_hz_mean": 0.710517503805175,
+ "dn_rate_hz_peak": 23.877473363774733,
+ "dn_rate_at_swipe_hz": 7.938206675364209,
+ "dn_rate_1s_before_swipe_hz": 2.3864449699209973,
+ "leg_spikes_after_swipe": {
+  "L": 59.785714285714285,
+  "R": 39.857142857142854
+ },
+ "eye_mean_hz": {
+  "L": 47.680704000000006,
+  "R": 35.632608000000005
+ },
+ "meta": {
+  "seed_l": 1,
+  "seed_r": 2,
+  "mode": "burst",
+  "duration": 50.0,
+  "control_dt": 0.016,
+  "substeps": 8,
+  "lif": {
+   "v_rest_mv": -52.0,
+   "v_reset_mv": -52.0,
+   "v_thresh_mv": -45.0,
+   "t_ref_ms": 2.2,
+   "tau_m_ms": 20.0,
+   "tau_s_ms": 5.0,
+   "w_syn_mv": 0.275,
+   "delay_ms": 1.8,
+   "dt_ms": 2.0,
+   "weight_scale": 0.5,
+   "adapt_mv": 0.6,
+   "tau_adapt_ms": 120.0,
+   "std_u": 0.15,
+   "std_tau_rec_ms": 480.0
+  },
+  "n_neurons": 166700,
+  "n_edges": 6242085,
+  "shuffle": null,
+  "threshold_z": 2.5,
+  "readout_cells": 2129,
+  "grid": [
+   24,
+   18
+  ],
+  "rate_max": 150.0,
+  "tonic_hz": 0.0,
+  "burst_hz": 1.5,
+  "autoplay": true,
+  "autoplay_amp": 0.8,
+  "autoplay_hz": 1.0,
+  "autoplay_whole": true,
+  "enc_gain": 6.0,
+  "l3_gain": 0.0,
+  "seed": 1,
+  "refractory_s": 0.4,
+  "global_refractory_s": 0.3,
+  "warmup_s": 1.0,
+  "tau_side_s": 0.8,
+  "scripted": null,
+  "teacher_gap": [
+   0.9,
+   1.6
+  ],
+  "teacher_panels": "LR",
+  "driven_cells": {
+   "L": 1749,
+   "R": 1785
+  },
+  "n_dn": 1314,
+  "leg_pool": {
+   "L": 68,
+   "R": 67
+  }
+ }
+}

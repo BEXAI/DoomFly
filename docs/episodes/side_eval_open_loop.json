@@ -1,0 +1,36 @@
+[
+ {
+  "tag": "v2_side_real",
+  "blocks": {
+   "L": [
+    10,
+    11
+   ],
+   "R": [
+    13,
+    13
+   ]
+  },
+  "correct": 23,
+  "total": 24,
+  "fraction": 0.9583333333333334,
+  "scripted": "L:15,R:15"
+ },
+ {
+  "tag": "v2_side_shuf",
+  "blocks": {
+   "L": [
+    1,
+    18
+   ],
+   "R": [
+    13,
+    13
+   ]
+  },
+  "correct": 14,
+  "total": 31,
+  "fraction": 0.45161290322580644,
+  "scripted": "L:15,R:15"
+ }
+]

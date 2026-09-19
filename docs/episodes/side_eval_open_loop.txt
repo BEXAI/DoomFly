@@ -1,0 +1,2 @@
+v2_side_real: decoder side correct  L-block 10/11  R-block 13/13  overall 23/24 = 0.96
+v2_side_shuf: decoder side correct  L-block 1/18  R-block 13/13  overall 14/31 = 0.45

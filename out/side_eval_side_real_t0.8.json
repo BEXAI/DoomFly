@@ -1,0 +1,19 @@
+[
+ {
+  "tag": "side_real_t0.8",
+  "blocks": {
+   "L": [
+    10,
+    12
+   ],
+   "R": [
+    13,
+    13
+   ]
+  },
+  "correct": 23,
+  "total": 25,
+  "fraction": 0.92,
+  "scripted": "L:15,R:15"
+ }
+]
