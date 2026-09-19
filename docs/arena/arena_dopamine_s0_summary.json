@@ -1,0 +1,36 @@
+{
+ "condition": "dopamine",
+ "seed": 0,
+ "duration": 120.0,
+ "log": "/home/user/DoomFly/out/arena_dopamine_s0.jsonl",
+ "time_on_phone_frac": 0.0,
+ "swipes": {
+  "L": 0,
+  "R": 0
+ },
+ "swipes_blocked": 26,
+ "rewards": 0,
+ "final_w_ratio": 0.9979710578918457,
+ "wall_hits": 10,
+ "wall_s": 194.16538310050964,
+ "ms_per_control_step": 25.88871774673462,
+ "ms_eye_encode_per_step": 1.6172440808020536,
+ "ms_brain_per_step": 23.76742626053128,
+ "pop_rates_hz": {
+  "eye_L": 10.497090395480225,
+  "eye_R": 9.72406162464986,
+  "dn_L": 0.24096798780487802,
+  "dn_R": 0.2750128600823045,
+  "dna_L": 0.5516025641025641,
+  "dna_R": 0.5349358974358974,
+  "leg_L": 0.16789215686274508,
+  "leg_R": 0.11032338308457712,
+  "kc": 0.23437294947506562,
+  "mbon": 0.9526632302405498,
+  "pam": 0.05147679324894514,
+  "med_L": 0.1650786483028524,
+  "med_R": 0.18424259467566556
+ },
+ "mean_pop_rate_hz": 0.2934457108578284,
+ "spikes": "/home/user/DoomFly/out/arena_dopamine_s0_spikes.npz"
+}

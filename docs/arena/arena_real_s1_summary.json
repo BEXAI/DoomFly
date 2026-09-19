@@ -1,0 +1,36 @@
+{
+ "condition": "real",
+ "seed": 1,
+ "duration": 120.0,
+ "log": "/home/user/DoomFly/out/arena_real_s1.jsonl",
+ "time_on_phone_frac": 0.0,
+ "swipes": {
+  "L": 0,
+  "R": 0
+ },
+ "swipes_blocked": 17,
+ "rewards": 0,
+ "final_w_ratio": 1.0,
+ "wall_hits": 9,
+ "wall_s": 191.95629286766052,
+ "ms_per_control_step": 25.594172382354735,
+ "ms_eye_encode_per_step": 1.5093376048002634,
+ "ms_brain_per_step": 23.933606826133506,
+ "pop_rates_hz": {
+  "eye_L": 9.185225988700566,
+  "eye_R": 9.5059243697479,
+  "dn_L": 0.18043699186991868,
+  "dn_R": 0.19589763374485597,
+  "dna_L": 0.3894230769230769,
+  "dna_R": 0.3403846153846154,
+  "leg_L": 0.13272058823529412,
+  "leg_R": 0.09253731343283582,
+  "kc": 0.10140666010498688,
+  "mbon": 0.49553264604811,
+  "pam": 0.02244198312236287,
+  "med_L": 0.14237788816136074,
+  "med_R": 0.1833370828646419
+ },
+ "mean_pop_rate_hz": 0.2549857028594281,
+ "spikes": "/home/user/DoomFly/out/arena_real_s1_spikes.npz"
+}

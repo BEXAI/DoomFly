@@ -341,9 +341,47 @@ weight drift (w/w₀ ≈ 0.999 before any reward). Uniform visual drive of the k
 not reach the mushroom body at all; patterned drive at the encoder's full range does (KC ≈ 2 Hz,
 MBON ≈ 8 Hz), so the analysis reports the mushroom-body rates actually reached.
 
-### 10.1 Results
+### 10.1 Results (`docs/arena/arena_summary.json`, five seeds × 120 s per condition)
 
-_Filled from `out/arena_summary.json` after the sweep._
+| condition | time on phone | visits | swipes applied | swipes blocked | 1st half → 2nd half | final KC→MBON w/w₀ |
+|---|---|---|---|---|---|---|
+| real | 8 % [1, 16] | 1.2 | 4.0 | 30.6 | 5 % → 10 % | 1.000 |
+| **dopamine** | **12 % [3, 28]** | **2.0** | **6.0** | 30.8 | 6 % → 18 % | **0.989** |
+| shuffled | 6 % [1, 10] | 1.2 | 4.4 | 26.6 | 8 % → 3 % | 1.000 |
+| random walker | 20 % [0, 46] | 1.0 | 0 (never applied) | 34.2 | 19 % → 21 % | 1.000 |
+
+Brackets are 95 % bootstrap intervals across seeds. Dopamine minus real, paired by seed:
++4.3 percentage points of time on the phone [−7.6, +19.6], +0.8 visits [+0.2, +1.4], learning
+(second-half minus first-half gain) +6.6 points [−13.5, +30.4]; exact sign-flip p = 0.75 and 0.63.
+Real vs random walker: −12 points, permutation p = 0.45. Real vs shuffled: +2 points, p = 0.70.
+
+**Honest reading.** With five seeds nothing here is significant, and the direction of the main
+comparison is the opposite of the doomscroll story: the brain-connected fly spends *less* time on
+the phone than the plain random walker. The mechanism is visible in the logs. Far from the phone
+the real brain is silent (a dark static room gives no visual onsets, so no descending activity) and
+the fly is just the baseline walker. When it steps onto the phone and sees the feed cut or scroll,
+the descending burst that triggers a swipe also raises walking speed (the DN → speed mapping,
+inherited from car-driving connectome projects), so the fly tends to run off the screen right after
+touching it. A real fly startled by motion is more likely to stop and orient. Every visit that did
+produce swipes was short (median 3–13 s).
+
+The dopamine condition is consistently, but not significantly, more "engaged": more visits in every
+seed, more applied swipes, and its time-on-phone rises from the first to the second half while the
+real condition barely changes. The synaptic weights moved by only 1.1 % on average (the reward
+fired 0–4 times per run), so this is an effect of a few rewards on a mostly silent mushroom body
+(KC ≈ 0.27 Hz, MBON ≈ 1.2 Hz, PAM 0.06 Hz off-phone). Novel-card approach could not be measured:
+almost no novel cuts happened while the fly was off the phone and within 2 s of reaching it.
+
+What would make this a real experiment rather than a pilot: (1) a DN → *stop-and-orient* mapping
+(or a data-driven one from DNp09 / DNa-type walking and halting neurons) instead of DN → speed;
+(2) 20+ seeds per condition, since the random walker alone spans 0–65 % time on the phone in five
+seeds; (3) a modulatory (non-spiking-effect) treatment of dopamine synapses, so a PAM pulse rewards
+the active Kenyon cells specifically instead of recruiting most of them; (4) longer runs, because
+learning needs rewards and rewards need visits. The code supports all four; none was tuned here.
+
+Figures: `docs/figures/arena_trajectories.png`, `arena_time_on_phone.png`, `arena_distance.png`,
+`arena_w_ratio.png`. Video: `python3 src/render_arena.py --events out/arena_dopamine_s4.jsonl ...`
+(the most eventful run: 5 visits, 17 swipes, 4 rewards, 42 % of the time on the phone).
 
 ## 9. Attribution (CC-BY)
 
