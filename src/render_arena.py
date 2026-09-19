@@ -778,7 +778,7 @@ class ArenaRenderer:
         # KC->MBON weight ratio bar
         self.w_disp += (self.w_ratio - self.w_disp) * 0.3
         by0 = 1450
-        T.draw(frame, "KC→MBON SYNAPTIC WEIGHT  w / w₀", HUD_X0, by0, 22, COL_GREY)
+        T.draw(frame, "KC→MBON WEIGHT  w / w₀", HUD_X0, by0, 22, COL_GREY)
         plastic = str(self.meta.get("condition", "")) == "dopamine" or self.w_ratio < 0.999
         T.draw(frame, f"{self.w_disp:.3f}" if plastic else "plasticity off", HUD_X1, by0, 22, COL_DOPA if plastic else COL_DIM, True, align="right")
         bx0, bx1, bh = HUD_X0, HUD_X1, 26
