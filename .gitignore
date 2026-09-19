@@ -35,3 +35,4 @@ out/baseline/
 out/episode_*.json
 out/summary_*.json
 out/reels_*/
+out/train/
