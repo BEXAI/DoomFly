@@ -40,7 +40,7 @@ data/raw/*.feather ──► src/build_graph.py ──► data/graph/{W.npz, ids
 ```
 
 Everything ran offline on 4 CPU cores / 15 GB RAM, no GPU. A 50 s episode simulates in
-60–80 s (19–26 ms per 16 ms control step, depending on activity) and renders in ~100 s (30 fps).
+60–80 s (19–26 ms per 16 ms control step, depending on activity) and renders in ~140 s (22 fps).
 
 ## 2. Data
 
@@ -258,14 +258,18 @@ spikes in the 0.5 s after a swipe. Figure: `docs/figures/episode_v2_s1.png`.
 
 ## 7. Video (`src/render.py`)
 
-Pure OpenCV/numpy compositing at 1080 × 1920, 60 fps (≈ 30 fps render): dark desk, open two-panel
-device mock-up (two 1335 × 1878 portrait panels, crease, titanium bevel, **no logo, no real UI**), a
-stylised top-down Drosophila perched over the hinge whose front-left / front-right leg flicks on each
-swipe, eye → panel glow cues in the intro, a 400 × 400 PiP of the 165,898 soma positions (L eye cyan,
-R eye orange, DNs green, front-leg MNs magenta; the volume's x axis is mirrored so the fly's left
-lobe is on the viewer's left, like the head-up fly) lit frame-accurately by the spike file, a HUD
-with the descending-neuron rate per side against its 1.5 Hz threshold, posts consumed L / R, swipes,
-spikes/s with a sparkline, title card (0–4 s), stats card (38–46 s) and attribution card (46–50 s).
+Pure OpenCV/numpy compositing at 1080 × 1920, 60 fps (≈ 22 fps render): a dark navy floor with a
+glowing perspective grid, the open two-panel device mock-up (two 1335 × 1878 portrait panels,
+crease, titanium bevel, two-layer drop shadow, **no logo, no real UI**), and a 2.5D-shaded
+Drosophila built procedurally (lit ellipsoids with specular and rim light, banded abdomen, bristled
+thorax, glossy faceted red eyes, translucent veined wings, cylinder-shaded legs with claws, soft
+contact shadow) perched head-up over the hinge; its front-left / front-right leg flicks on each
+swipe. The 460 × 460 PiP is a depth-weighted, bloomed point cloud of the 165,898 soma positions
+(optic lobes amber, central brain and VNC cool blue, descending neurons green, front-leg MNs
+magenta; the volume's x axis is mirrored so the fly's left lobe is on the viewer's left, like the
+head-up fly) with a slow ±12° yaw, lit frame-accurately by the spike file. HUD: the
+descending-neuron rate per side against its 1.5 Hz threshold, posts consumed L / R, swipes,
+spikes/s with a sparkline; title card (0–4 s), stats card (38–46 s), attribution card (46–50 s).
 Feed frames are replayed deterministically from the swipe times and meta line in the events log.
 
 ## 8. Reproduce
