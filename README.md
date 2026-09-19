@@ -300,7 +300,7 @@ scrolling mechanics, plain colour-field clips), which is what the rendering here
 ```bash
 cd ~/Projects && git clone https://github.com/BEXAI/DoomFly.git && cd DoomFly
 python3 -m venv .venv && source .venv/bin/activate
-pip install numpy scipy pandas pyarrow pillow opencv-python-headless matplotlib tqdm imageio imageio-ffmpeg
+pip install numpy scipy pandas pyarrow pillow opencv-python-headless matplotlib tqdm imageio imageio-ffmpeg certifi
 python3 src/download.py                                  # ~1.1 GB
 python3 src/build_graph.py                               # ~3 min, peaks ~8 GB RAM
 # build_graph.py reads data/graph/sets_draft.json (bodyId sets derived from the annotations, see docs/RESEARCH_DATA.md);

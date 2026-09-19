@@ -17,13 +17,25 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CLIPS = os.path.join(ROOT, "assets", "clips")
 
 
+def _ssl_context():
+    """Verified TLS context. python.org builds of Python on macOS ship without root certificates
+    unless "Install Certificates.command" was run; use certifi's bundle when it is installed."""
+    import ssl
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
+
+
 def main(manifest: str) -> None:
     with open(manifest) as f:
         m = json.load(f)
     os.makedirs(CLIPS, exist_ok=True)
+    ctx = _ssl_context()
     for c in m["clips"]:
         dst = os.path.join(CLIPS, c["name"] + ".mp4")
-        with urllib.request.urlopen(c["url"]) as r:
+        with urllib.request.urlopen(c["url"], context=ctx) as r:
             expected = int(r.headers.get("Content-Length", "0"))
             if os.path.exists(dst) and expected and os.path.getsize(dst) == expected:
                 print("keep", dst); continue
