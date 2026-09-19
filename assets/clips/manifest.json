@@ -1,0 +1,71 @@
+{
+ "model": "kling3_0_turbo",
+ "duration_s": 5,
+ "aspect": "9:16",
+ "resolution": "720p",
+ "generated": "2026-09-19",
+ "license": "generated for this project via the author's Higgsfield account; original content, no logos, no text",
+ "note": "The build container could not download these (CDN blocked by egress policy); run `python3 src/fetch_clips.py` from a machine with normal internet access, or download by hand into assets/clips/<name>.mp4.",
+ "clips": [
+  {
+   "name": "00_neon_dance",
+   "url": "https://d8j0ntlcm91z4.cloudfront.net/user_39hjWHAnSlQm2chqmsLrWZJJlK3/hf_20260919_184943_77fb7d03-4ead-4d71-bb14-ca99452ec523.mp4",
+   "prompt": "a young woman dancing in a neon-lit loft",
+   "novel": false
+  },
+  {
+   "name": "01_latte_pour",
+   "url": "https://d8j0ntlcm91z4.cloudfront.net/user_39hjWHAnSlQm2chqmsLrWZJJlK3/hf_20260919_184942_a4cb1296-6fa9-4e0a-9376-d26141d07efc.mp4",
+   "prompt": "barista pouring latte art",
+   "novel": false
+  },
+  {
+   "name": "02_skate_kickflip",
+   "url": "https://d8j0ntlcm91z4.cloudfront.net/user_39hjWHAnSlQm2chqmsLrWZJJlK3/hf_20260919_184942_d8d5c65e-bfb1-42b4-8590-516553921abd.mp4",
+   "prompt": "skateboarder landing a kickflip at golden hour",
+   "novel": false
+  },
+  {
+   "name": "03_cat_windowsill",
+   "url": "https://d8j0ntlcm91z4.cloudfront.net/user_39hjWHAnSlQm2chqmsLrWZJJlK3/hf_20260919_184943_f36a334e-6168-46ed-a419-3cee2d0fb1df.mp4",
+   "prompt": "orange cat batting a toy on a sunlit windowsill",
+   "novel": false
+  },
+  {
+   "name": "04_city_timelapse",
+   "url": "https://d8j0ntlcm91z4.cloudfront.net/user_39hjWHAnSlQm2chqmsLrWZJJlK3/hf_20260919_184944_4833e3ea-cd1f-47f7-94bd-8d3c982ad9dc.mp4",
+   "prompt": "night city street timelapse in light rain",
+   "novel": false
+  },
+  {
+   "name": "05_wok_cooking",
+   "url": "https://d8j0ntlcm91z4.cloudfront.net/user_39hjWHAnSlQm2chqmsLrWZJJlK3/hf_20260919_184942_abefa57e-bf57-4e88-8059-348dd0cbe82b.mp4",
+   "prompt": "overhead wok cooking with flames",
+   "novel": false
+  },
+  {
+   "name": "06_ocean_drone",
+   "url": "https://d8j0ntlcm91z4.cloudfront.net/user_39hjWHAnSlQm2chqmsLrWZJJlK3/hf_20260919_184942_04b39db2-c0b8-4369-a6b4-68334d100c60.mp4",
+   "prompt": "drone over turquoise waves",
+   "novel": false
+  },
+  {
+   "name": "07_abstract_flash",
+   "url": "https://d8j0ntlcm91z4.cloudfront.net/user_39hjWHAnSlQm2chqmsLrWZJJlK3/hf_20260919_184942_d4b98b3b-cdc8-4e85-ac02-2d956b65eee8.mp4",
+   "prompt": "abstract high-contrast yellow/black animation (novel)",
+   "novel": true
+  },
+  {
+   "name": "08_paint_strokes",
+   "url": "https://d8j0ntlcm91z4.cloudfront.net/user_39hjWHAnSlQm2chqmsLrWZJJlK3/hf_20260919_184943_8d8d54fe-189c-41af-990d-0de316ed2cf5.mp4",
+   "prompt": "brush sweeping teal and coral acrylic",
+   "novel": false
+  },
+  {
+   "name": "09_puppy_leaves",
+   "url": "https://d8j0ntlcm91z4.cloudfront.net/user_39hjWHAnSlQm2chqmsLrWZJJlK3/hf_20260919_184943_0c009b61-0bc7-4545-8556-6d19969a77e6.mp4",
+   "prompt": "puppy running through autumn leaves",
+   "novel": false
+  }
+ ]
+}
