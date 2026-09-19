@@ -30,7 +30,7 @@ import json
 import os
 import sys
 import time
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -70,10 +70,10 @@ def run_phases(conn: Connectome, cfg: LIFConfig, phases: Sequence[Tuple[int, Opt
         masks[k] = m
     ever = np.zeros(conn.n, bool)
     s = 0
-    for steps, idx, rate in phases:
-        rates = None if idx is None else np.full(idx.size, float(rate), np.float64)
+    for steps, drive_idx, rate in phases:
+        rate_arr = np.full(drive_idx.size, float(rate), np.float64) if drive_idx is not None else None
         for _ in range(steps):
-            fired = brain.step(idx, rates)
+            fired = brain.step(drive_idx, rate_arr)
             counts["all"][s] = fired.size
             ever[fired] = True
             for k, m in masks.items():
@@ -144,7 +144,7 @@ def test_A(conn: Connectome, factor: float, configs: List[Tuple[float, float]]) 
     record = {"MN9": mn9, "MN9_L": mn9_l, "MN9_R": mn9_r, "mn_all": conn.idx("mn_all"),
               "dn_all": conn.idx("dn_all"), "grn_sugar": sugar, "grn_bitter": bitter}
     conds = {"sugar": sugar, "sugar+bitter": both, "bitter": bitter}
-    out = {"protocol": {"baseline_s": base_steps * dt_s, "drive_s": drive_steps * dt_s, "post_s": post_steps * dt_s, "drive_hz": 150.0,
+    out: Dict[str, Any] = {"protocol": {"baseline_s": base_steps * dt_s, "drive_s": drive_steps * dt_s, "post_s": post_steps * dt_s, "drive_hz": 150.0,
                         "sets": {"grn_sugar": "LB3a-d proxy (78)", "grn_bitter": "LB1a-e proxy (56)",
                                  "MN9": [10331, 16949]}},
            "configs": {}, "traces": {}}
@@ -154,8 +154,8 @@ def test_A(conn: Connectome, factor: float, configs: List[Tuple[float, float]]) 
     for ws, adapt in configs:
         key = cfg_label(ws, adapt)
         cfg = LIFConfig(weight_scale=ws, adapt_mv=adapt)
-        res = {"weight_scale": ws, "adapt_mv": adapt, "conditions": {}}
-        traces = {}
+        res: Dict[str, Any] = {"weight_scale": ws, "adapt_mv": adapt, "conditions": {}}
+        traces: Dict[str, Any] = {}
         for cname, idx in conds.items():
             t0 = time.time()
             counts, ever, brain = run_phases(conn, cfg, [(base_steps, None, 0.0), (drive_steps, idx, 150.0), (post_steps, None, 0.0)], record)
@@ -163,7 +163,7 @@ def test_A(conn: Connectome, factor: float, configs: List[Tuple[float, float]]) 
             ra = runaway_stats(counts["all"][:base_steps + drive_steps], conn.n, dt_s, drive_steps // 2)
             ra["pop_rate_hz_post_drive"] = rate_hz(counts["all"], conn.n, dt_s, post_end)
             ra["latched_after_drive"] = bool(ra["pop_rate_hz_post_drive"] > 1.0)
-            r = {
+            r: Dict[str, Any] = {
                 "mn9_spikes_drive": int(counts["MN9"][drv].sum()),
                 "mn9_spikes_baseline": int(counts["MN9"][base].sum()),
                 "mn9_rate_hz_drive": rate_hz(counts["MN9"], mn9.size, dt_s, drv),
@@ -239,7 +239,7 @@ def eye_drive_run(conn: Connectome, cfg: LIFConfig, steps: int, seed: int = 0, p
         if l in rates and r in rates:
             lat[tag] = {"left_hz": rates[l], "right_hz": rates[r], "index": lat_index(rates[l], rates[r]),
                         "left_spikes_last_window": spikes[l], "right_spikes_last_window": spikes[r]}
-    res = {
+    res: Dict[str, Any] = {
         "steps": steps, "sim_s": steps * dt_s, "post_s": post_steps * dt_s, "window_s": win * dt_s, "drive_hz": 60.0, "n_driven": int(eye.size),
         "pop_rate_hz_last_window": ra["pop_rate_hz_last_window"],
         "pop_rate_hz_excluding_driven_last_window": (counts["all"][last].sum() - counts["eye_driven"][last].sum())
@@ -263,7 +263,7 @@ def test_B(conn: Connectome, factor: float, configs: List[Tuple[float, float]]) 
     silent_steps = int(round(500 * factor))
     eye_steps = int(round(750 * factor))
     post_steps = int(round(150 * factor))
-    out = {"silence": {}, "eye_drive": {}, "criterion": "pop mean rate over last 0.5 s of drive < 5 Hz, not rising (last quarter <= 1.2x previous quarter), and not latched (pop rate > 1 Hz 0.15-0.3 s after drive off)"}
+    out: Dict[str, Any] = {"silence": {}, "eye_drive": {}, "criterion": "pop mean rate over last 0.5 s of drive < 5 Hz, not rising (last quarter <= 1.2x previous quarter), and not latched (pop rate > 1 Hz 0.15-0.3 s after drive off)"}
     for ws, adapt in configs:
         key = cfg_label(ws, adapt)
         cfg = LIFConfig(weight_scale=ws, adapt_mv=adapt)
@@ -311,7 +311,7 @@ def test_C(conn: Connectome, factor: float, ws: float, adapt: float, real_run: O
     for tag, _, _ in LAT_SETS:
         if tag in real_run["lateralisation"] and tag in shuf_run["lateralisation"]:
             comp[tag] = {"real": real_run["lateralisation"][tag], "shuffled": shuf_run["lateralisation"][tag]}
-    out = {"config": cfg_label(ws, adapt), "shuffle_seed": 0, "real": real_run, "shuffled": shuf_run, "comparison": comp,
+    out: Dict[str, Any] = {"config": cfg_label(ws, adapt), "shuffle_seed": 0, "real": real_run, "shuffled": shuf_run, "comparison": comp,
            "real_vpn_strongly_left": bool((real_run["lateralisation"]["vpn"]["index"] or 0) > 0.5),
            "real_ol_strongly_left": bool((real_run["lateralisation"]["ol"]["index"] or 0) > 0.5),
            "shuffled_vpn_lateralised": bool(abs(shuf_run["lateralisation"]["vpn"]["index"] or 0) > 0.5),

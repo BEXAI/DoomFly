@@ -266,7 +266,7 @@ class Feed:
         self.novel_amp = float(novel_amp)
         self.novel_hz = float(novel_hz)
         self.autoplay_whole = bool(autoplay_whole)  # cut the whole card, not just its image block
-        self._base_frame = None
+        self._base_frame: Optional[np.ndarray] = None
 
         # Caches.
         self._cards: "OrderedDict[int, np.ndarray]" = OrderedDict()
@@ -556,7 +556,7 @@ class Feed:
         strip_w = S(self.width)
         x0, x1 = S(SIDE_MARGIN), S(self.width - SIDE_MARGIN)
         cw = x1 - x0
-        strip = np.empty((h_px, strip_w, 3), np.uint8)
+        strip: np.ndarray = np.empty((h_px, strip_w, 3), np.uint8)
         strip[:] = th["bg"]
 
         if spec["kind"] == "novel":
@@ -686,7 +686,7 @@ class Feed:
         S = self._S
         h = S(APPBAR_H)
         w = S(self.width)
-        bar = np.empty((h, w, 3), np.uint8)
+        bar: np.ndarray = np.empty((h, w, 3), np.uint8)
         bar[:] = th["appbar"]
         cv2.rectangle(bar, (0, h - max(1, S(3))), (w - 1, h - 1), th["appbar_line"], -1)
         accent = self.palette["accent"][0]

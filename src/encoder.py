@@ -49,7 +49,7 @@ from __future__ import annotations
 import argparse
 import math
 import os
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
@@ -225,7 +225,7 @@ class EyeEncoder:
             raise ValueError(f"luminance grid shape {lum.shape} != {(self.rows, self.cols)}")
         return np.clip(lum.reshape(-1), 0.0, 1.0)
 
-    def encode(self, lum_grid: np.ndarray, dt_s: float) -> Dict[str, object]:
+    def encode(self, lum_grid: np.ndarray, dt_s: float) -> Dict[str, Any]:
         """One frame -> dict(idx, rate_hz, on, off, motion).
 
         ``idx`` (int64, k) and ``rate_hz`` (float32, k) concatenate L1, L2 (and
@@ -305,7 +305,7 @@ def _self_test(args: argparse.Namespace) -> None:
     swipes_l = {int(round(t * fps)) for t in (0.5, 1.8)}
 
     ts = np.arange(n) * dt
-    rec = {k: np.zeros(n, np.float32) for k in ("L_on", "L_off", "L_mot", "L_me", "R_on", "R_off", "R_mot", "R_me")}
+    rec: Dict[str, np.ndarray] = {k: np.zeros(n, np.float32) for k in ("L_on", "L_off", "L_mot", "L_me", "R_on", "R_off", "R_mot", "R_me")}
     for f in range(n):
         if f in swipes_l:
             feedL.swipe()

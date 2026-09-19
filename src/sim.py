@@ -143,7 +143,7 @@ class Brain:
         self.last_fired = np.zeros(0, np.int64)
 
     # ------------------------------------------------------------------ core
-    def _drive_from(self, fired: np.ndarray) -> np.ndarray:
+    def _drive_from(self, fired: np.ndarray) -> Optional[np.ndarray]:
         """Sum of the W columns of the neurons that fired (sparse column gather)."""
         if fired.size == 0:
             return None
@@ -174,7 +174,7 @@ class Brain:
         self.u = self.decay_v * self.u + inflow
 
         fired_mask = self.u >= self.u_thresh
-        if drive_idx is not None and drive_idx.size:
+        if drive_idx is not None and drive_rate_hz is not None and drive_idx.size:
             p = np.clip(drive_rate_hz * self.dt_s, 0.0, 1.0)
             kicks = self.rng.random(drive_idx.size) < p
             forced = drive_idx[kicks]
@@ -261,7 +261,7 @@ class SpikeRecorder:
             arrs["pop_" + k] = np.asarray(v, np.int32)
         for k, v in (extra or {}).items():
             arrs[k] = v
-        np.savez_compressed(path, **arrs)
+        np.savez_compressed(path, **arrs)  # type: ignore[arg-type]
 
 
 def rates_hz(counts: np.ndarray, n_cells: int, dt_s: float) -> np.ndarray:

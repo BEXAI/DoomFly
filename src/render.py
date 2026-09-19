@@ -37,7 +37,7 @@ import os
 import sys
 import time
 from collections import deque
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
@@ -60,7 +60,7 @@ FEED_SCALE = 0.35          # feed raster scale at k = 1 (1335 x 1878 -> 467 x 65
 NOMINAL_LEN_S = 50.0       # storyboard timings are specified for a 50 s episode
 
 # Device quad in the frame (design px): TL, TR, BR, BL (mild keystone, seen from above).
-DEVICE_QUAD = np.float32([[68, 530], [1012, 530], [1068, 1265], [12, 1265]])
+DEVICE_QUAD = np.array([[68, 530], [1012, 530], [1068, 1265], [12, 1265]], np.float32)
 DEVICE_BEVEL = 26
 DEVICE_HINGE = 14
 
@@ -181,8 +181,8 @@ class TextRenderer:
             try:
                 f = self._ImageFont.truetype(path, px)
             except OSError:
-                f = self._ImageFont.load_default(size=px)
-            self._fonts[key] = f
+                f = self._ImageFont.load_default(size=px)  # type: ignore[assignment]
+            self._fonts[key] = f  # type: ignore[assignment]
         return f
 
     def measure(self, text: str, size: float, bold: bool = False) -> int:
@@ -355,7 +355,7 @@ def make_fixture(out_dir: str, duration: float = 50.0, n: int = 20000, seed: int
     arrs = {"frames_packed": packed, "n": np.int64(n), "total": total}
     for k, v in pop_counts.items():
         arrs["pop_" + k] = v
-    np.savez_compressed(paths["spikes"], **arrs)
+    np.savez_compressed(paths["spikes"], **arrs)  # type: ignore[arg-type]
     np.save(paths["positions"], pos)
     np.save(paths["groups"], groups)
     return paths
@@ -385,7 +385,7 @@ def load_spikes(path: Optional[str]) -> Optional[dict]:
     if not path or not os.path.exists(path):
         return None
     d = np.load(path)
-    out = {"frames_packed": d["frames_packed"], "n": int(d["n"]), "total": d["total"]}
+    out: Dict[str, Any] = {"frames_packed": d["frames_packed"], "n": int(d["n"]), "total": d["total"]}
     return out
 
 
@@ -404,7 +404,7 @@ def build_background(W: int, H: int, k: float, quad: np.ndarray) -> np.ndarray:
     vig = 1.0 - 0.55 * np.clip(r2, 0, 1)                                                  # (H,W)
     bg = col * vig[..., None]                                                              # (H,W,3)
     rng = np.random.default_rng(3)
-    grain = rng.normal(0, 3.5, (H, W)).astype(np.float32)
+    grain: np.ndarray = rng.normal(0, 3.5, (H, W)).astype(np.float32)
     grain = cv2.GaussianBlur(grain, (0, 0), 0.8 * max(k, 0.5))
     bg += grain[..., None]
     # Soft spot light behind the device.
@@ -418,8 +418,8 @@ def build_background(W: int, H: int, k: float, quad: np.ndarray) -> np.ndarray:
     q[:, 1] += 22 * k
     c = q.mean(axis=0)
     q = (q - c) * np.array([1.03, 1.04], np.float32) + c
-    cv2.fillPoly(sh, [np.int32(q).reshape(-1, 1, 2)], 1.0)
-    sh = cv2.GaussianBlur(sh, (0, 0), 28 * k)
+    cv2.fillPoly(sh, [np.asarray(q, np.int32).reshape(-1, 1, 2)], 1.0)
+    sh = cv2.GaussianBlur(sh, (0, 0), 28 * k)  # type: ignore[assignment]
     bg = (bg.astype(np.float32) * (1.0 - 0.75 * sh[..., None])).astype(np.uint8)
     return bg
 
@@ -468,8 +468,8 @@ class Device:
         x0, y0 = np.floor(quad.min(axis=0)).astype(int)
         x1, y1 = np.ceil(quad.max(axis=0)).astype(int)
         self.roi = (max(0, x0), max(0, y0), x1 + 1, y1 + 1)
-        src = np.float32([[0, 0], [Wc, 0], [Wc, Hc], [0, Hc]])
-        dst = quad - np.float32([self.roi[0], self.roi[1]])
+        src = np.array([[0, 0], [Wc, 0], [Wc, Hc], [0, Hc]], np.float32)
+        dst = quad - np.array([self.roi[0], self.roi[1]], np.float32)
         self.Hm = cv2.getPerspectiveTransform(src, dst)
         self.roi_size = (self.roi[2] - self.roi[0], self.roi[3] - self.roi[1])
         wm = cv2.warpPerspective(self.mask, self.Hm, self.roi_size, flags=cv2.INTER_LINEAR)
@@ -479,9 +479,9 @@ class Device:
         self.quad = quad
 
     def to_frame(self, pts_composite: Sequence[Tuple[float, float]]) -> np.ndarray:
-        p = np.float32(pts_composite).reshape(-1, 1, 2)
+        p = np.asarray(pts_composite, np.float32).reshape(-1, 1, 2)
         out = cv2.perspectiveTransform(p, self.Hm).reshape(-1, 2)
-        return out + np.float32([self.roi[0], self.roi[1]])
+        return out + np.array([self.roi[0], self.roi[1]], np.float32)
 
     def panel_centers(self) -> Tuple[np.ndarray, np.ndarray]:
         B, G, pw, ph = self.B, self.G, self.pw, self.ph
@@ -545,7 +545,7 @@ class Fly:
 
         def paint(mask: np.ndarray, color, opacity: float = 1.0) -> None:
             a = (mask.astype(np.float32) / 255.0) * opacity
-            col[:] = col * (1 - a[..., None]) + np.float32(color)[None, None, :] * a[..., None]
+            col[:] = col * (1 - a[..., None]) + np.asarray(color, np.float32)[None, None, :] * a[..., None]
             alp[:] = alp + a * (1 - alp)
 
         def shape_mask() -> np.ndarray:
@@ -559,7 +559,7 @@ class Fly:
             w = 50 * math.sqrt(max(0.0, 1 - u * u)) * (1 - 0.30 * (y - 22) / 192)
             left.append(P(-w, y))
             right.append(P(w, y))
-        abd_poly = np.int32(left + right[::-1]).reshape(-1, 1, 2)
+        abd_poly = np.array(left + right[::-1], np.int32).reshape(-1, 1, 2)
         m = shape_mask()
         cv2.fillPoly(m, [abd_poly], 255, cv2.LINE_AA)
         paint(cv2.dilate(m, np.ones((R(4), R(4)), np.uint8)), (24, 32, 48))  # dark outline
@@ -640,13 +640,13 @@ class Fly:
             fm = shape_mask()
             step = 4.6
             row = 0
-            y = ey - 34
-            while y < ey + 34:
-                x = side * ex - 26 + (step / 2 if row % 2 else 0)
-                while x < side * ex + 26:
-                    cv2.circle(fm, P(x, y), R(1.5), 255, -1, cv2.LINE_AA)
-                    x += step
-                y += step * 0.87
+            fy: float = ey - 34
+            while fy < ey + 34:
+                fx: float = side * ex - 26 + (step / 2 if row % 2 else 0)
+                while fx < side * ex + 26:
+                    cv2.circle(fm, P(fx, fy), R(1.5), 255, -1, cv2.LINE_AA)
+                    fx += step
+                fy += step * 0.87
                 row += 1
             paint(cv2.bitwise_and(fm, em), (14, 14, 132), 0.85)
             # specular highlight
@@ -655,9 +655,9 @@ class Fly:
             paint(cv2.bitwise_and(hm, em), (230, 230, 245), 0.55)
 
         bgr = np.clip(col, 0, 255).astype(np.uint8)
-        a = np.clip(alp * 255, 0, 255).astype(np.uint8)
+        a: np.ndarray = np.clip(alp * 255, 0, 255).astype(np.uint8)
         out_w, out_h = int(240 * k), int(420 * k)
-        bgr = cv2.resize(bgr, (out_w, out_h), interpolation=cv2.INTER_AREA)
+        bgr = cv2.resize(bgr, (out_w, out_h), interpolation=cv2.INTER_AREA)  # type: ignore[assignment]
         a = cv2.resize(a, (out_w, out_h), interpolation=cv2.INTER_AREA)
         return bgr, a
 
@@ -700,18 +700,18 @@ class Fly:
         for name in ("hind", "mid", "front"):
             ax, ay = self.LEG_ATTACH[name]
             for side in (-1, 1):
-                A = np.float32(F(side * ax, ay))
+                A = np.asarray(F(side * ax, ay), np.float32)
                 if name == "front":
                     age = swipe_age["L"] if side < 0 else swipe_age["R"]
                     tx, ty = self._front_tip(side, age)
-                    T = np.float32(F(tx, ty, with_bob=False))
+                    T = np.asarray(F(tx, ty, with_bob=False), np.float32)
                 else:
                     rx, ry = self.LEG_REST[name]
-                    T = np.float32(F(side * rx, ry, with_bob=False))
+                    T = np.asarray(F(side * rx, ry, with_bob=False), np.float32)
                 d = T - A
                 L = float(np.hypot(*d)) + 1e-6
                 u = d / L
-                n = np.float32([-u[1], u[0]])
+                n = np.array([-u[1], u[0]], np.float32)
                 if n[0] * side + n[1] * (-0.45) < 0:
                     n = -n
                 bend = 0.36 if name != "front" else 0.30
@@ -720,13 +720,13 @@ class Fly:
                 pts = [A, knee, ankle, T]
                 th = self.LEG_THICK[name]
                 for i in range(3):
-                    p0, p1 = tuple(np.int32(np.round(pts[i]))), tuple(np.int32(np.round(pts[i + 1])))
+                    p0, p1 = _pt(pts[i]), _pt(pts[i + 1])
                     cv2.line(frame, p0, p1, self.leg_edge, max(1, int(round((th[i] + 2.5) * k))), cv2.LINE_AA)
                 for i in range(3):
-                    p0, p1 = tuple(np.int32(np.round(pts[i]))), tuple(np.int32(np.round(pts[i + 1])))
+                    p0, p1 = _pt(pts[i]), _pt(pts[i + 1])
                     cv2.line(frame, p0, p1, self.leg_color, max(1, int(round(th[i] * k))), cv2.LINE_AA)
-                cv2.circle(frame, tuple(np.int32(np.round(knee))), max(1, int(round(4.2 * k))), (40, 52, 76), -1, cv2.LINE_AA)
-                cv2.circle(frame, tuple(np.int32(np.round(ankle))), max(1, int(round(3.2 * k))), (40, 52, 76), -1, cv2.LINE_AA)
+                cv2.circle(frame, _pt(knee), max(1, int(round(4.2 * k))), (40, 52, 76), -1, cv2.LINE_AA)
+                cv2.circle(frame, _pt(ankle), max(1, int(round(3.2 * k))), (40, 52, 76), -1, cv2.LINE_AA)
                 # tarsus contact ring while dragging
                 if name == "front":
                     age = swipe_age["L"] if side < 0 else swipe_age["R"]
@@ -735,7 +735,7 @@ class Fly:
                         a = clamp(a, 0, 1)
                         colr = COL_L if side < 0 else COL_R
                         cc = tuple(int(c * a + 40 * (1 - a)) for c in colr)
-                        cv2.circle(frame, tuple(np.int32(np.round(T))), int(round((16 + 14 * (1 - a)) * k)), cc, max(1, int(round(3.5 * k))), cv2.LINE_AA)
+                        cv2.circle(frame, _pt(T), int(round((16 + 14 * (1 - a)) * k)), cc, max(1, int(round(3.5 * k))), cv2.LINE_AA)
 
         # ---- antennae (idle twitch) ----
         for i, side in enumerate((-1, 1)):
@@ -776,7 +776,7 @@ class BrainPiP:
             self.flat = np.zeros(0, np.int64)
             self.base = np.zeros((size, size, 3), np.float32)
             self.spike_cols = np.zeros((0, 3), np.float32)
-            self.counts = {}
+            self.counts: Dict[int, int] = {}
             return
         pos = positions[:n] if positions.shape[0] >= n else np.vstack([positions, np.full((n - positions.shape[0], 3), np.nan, np.float32)])
         if groups is None:
@@ -820,12 +820,12 @@ class BrainPiP:
             inten = 1.0 - np.exp(-cnt / 1.6)
             gain = 0.55 if gi == 0 else 0.8
             base += inten[:, None] * cols[gi][None, :] * gain
-        base = base.reshape(size, size, 3)
-        base = cv2.GaussianBlur(base, (0, 0), 0.6)
+        base = base.reshape(size, size, 3)  # type: ignore[assignment]
+        base = cv2.GaussianBlur(base, (0, 0), 0.6)  # type: ignore[assignment]
         self.base = np.clip(base, 0, 1)
         # Spike colours: group colour lifted toward white.
         self.spike_cols = (cols * 0.55 + 0.45)[g]  # (n_valid, 3): group colour lifted toward white
-        self.spike_cols[g == 0] = np.float32([0.95, 0.95, 0.98])
+        self.spike_cols[g == 0] = np.array([0.95, 0.95, 0.98], np.float32)
 
     def deposit(self, spiked: np.ndarray) -> None:
         """Add one control step of spikes (bool (N,)) to the glow buffer."""
@@ -835,7 +835,7 @@ class BrainPiP:
         f = self.flat[s]
         if f.size == 0:
             return
-        dep = np.zeros((self.size * self.size, 3), np.float32)
+        dep: np.ndarray = np.zeros((self.size * self.size, 3), np.float32)
         np.add.at(dep, f, self.spike_cols[s])
         dep = dep.reshape(self.size, self.size, 3)
         dep = cv2.GaussianBlur(dep, (0, 0), 1.1 * max(self.k, 0.6)) * 4.0
@@ -940,8 +940,8 @@ class Renderer:
         for side, eye in zip(("L", "R"), eyes):
             tgt = self.panel_centers[side]
             colr = COL_L if side == "L" else COL_R
-            p0 = np.float32(eye)
-            p1 = np.float32(tgt)
+            p0 = np.asarray(eye, np.float32)
+            p1 = np.asarray(tgt, np.float32)
             d = p1 - p0
             L = float(np.hypot(*d))
             u = d / max(L, 1e-6)
@@ -951,19 +951,19 @@ class Renderer:
             x1, y1 = min(self.W, x1), min(self.H, y1)
             roi = frame[y0:y1, x0:x1]
             over = roi.copy()
-            off = np.float32([x0, y0])
+            off = np.array([x0, y0], np.float32)
             dash, gap = 16 * k, 11 * k
             phase = (t * 90 * k) % (dash + gap)
             s = -phase
             while s < L:
                 a0, a1 = max(s, 22 * k), min(s + dash, L - 26 * k)
                 if a1 > a0:
-                    q0 = tuple(np.int32(np.round(p0 + u * a0 - off)))
-                    q1 = tuple(np.int32(np.round(p0 + u * a1 - off)))
+                    q0 = _pt(p0 + u * a0 - off)
+                    q1 = _pt(p0 + u * a1 - off)
                     cv2.line(over, q0, q1, tuple(int(c * 0.5) for c in colr), max(1, int(round(9 * k))), cv2.LINE_AA)
                     cv2.line(over, q0, q1, colr, max(1, int(round(3 * k))), cv2.LINE_AA)
                 s += dash + gap
-            c = tuple(np.int32(np.round(p1 - off)))
+            c = _pt(p1 - off)
             cv2.circle(over, c, int(20 * k), colr, max(1, int(round(3 * k))), cv2.LINE_AA)
             cv2.circle(over, c, int(5 * k), colr, -1, cv2.LINE_AA)
             cv2.addWeighted(roi, 1 - a, over, a, 0, dst=roi)
@@ -1008,7 +1008,7 @@ class Renderer:
         for gi in (1, 2, 3, 4):
             cv2.circle(frame, (int((x + 10) * self.k), int((y + 16) * self.k)), int(8 * self.k), GROUP_COLORS[gi], -1, cv2.LINE_AA)
             w = T.draw(frame, GROUP_NAMES[gi], x + 28, y, 26, COL_GREY)
-            x += 28 + w / self.k + 30
+            x += 28 + w / self.k + 30  # type: ignore[assignment]
         T.draw(frame, "left eye → left feed · right eye → right feed", 40, 392, 24, COL_DIM)
         T.draw(frame, "front-left leg swipes L · front-right swipes R", 40, 426, 24, COL_DIM)
 
@@ -1051,10 +1051,10 @@ class Renderer:
             xs = x0 + int(14 * k) + (np.arange(vals.size) + (n_show - vals.size)) / (n_show - 1) * (x1 - x0 - int(28 * k))
             ys = y1 - int(12 * k) - vals / vmax * (y1 - y0 - int(30 * k))
             pts = np.int32(np.round(np.stack([xs, ys], axis=1))).reshape(-1, 1, 2)
-            poly = np.vstack([pts, np.int32([[[pts[-1, 0, 0], y1 - int(6 * k)]], [[pts[0, 0, 0], y1 - int(6 * k)]]])])
+            poly = np.vstack([pts, np.array([[[pts[-1, 0, 0], y1 - int(6 * k)]], [[pts[0, 0, 0], y1 - int(6 * k)]]], np.int32)])
             roi = frame[y0:y1, x0:x1]
             over = roi.copy()
-            cv2.fillPoly(over, [poly - np.int32([x0, y0])], (90, 70, 40), cv2.LINE_AA)
+            cv2.fillPoly(over, [poly - np.array([x0, y0], np.int32)], (90, 70, 40), cv2.LINE_AA)
             cv2.addWeighted(roi, 0.65, over, 0.35, 0, dst=roi)
             cv2.polylines(frame, [pts], False, (210, 190, 120), max(1, int(round(3 * k))), cv2.LINE_AA)
             cv2.circle(frame, tuple(pts[-1, 0]), int(6 * k), COL_WHITE, -1, cv2.LINE_AA)
@@ -1083,7 +1083,7 @@ class Renderer:
         y0 = y_center - card_h / 2
         k = self.k
         fill_panel(frame, int(x0 * k), int(y0 * k), int((x0 + max_width) * k), int((y0 + card_h) * k), int(36 * k),
-                   (10, 10, 14), 0.82 * alpha, border=tuple(int(c * alpha) for c in (80, 80, 92)))
+                   (10, 10, 14), 0.82 * alpha, border=(int(80 * alpha), int(80 * alpha), int(92 * alpha)))
         y = y0 + pad
         for ln, size, color, bold in lines:
             if ln:
@@ -1269,6 +1269,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     r = Renderer(args, meta, events, spikes, positions, groups, stats)
     r.run()
     return 0
+
+
+
+def _pt(v) -> Tuple[int, int]:
+    """Round a 2-vector to an integer pixel tuple for OpenCV."""
+    r = np.round(np.asarray(v, dtype=np.float64))
+    return int(r[0]), int(r[1])
 
 
 if __name__ == "__main__":

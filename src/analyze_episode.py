@@ -84,15 +84,15 @@ def analyse(tag: str, out_dir: str = os.path.join(ROOT, "out")) -> dict:
         ax[3].plot([ts_], [0 if side == "L" else 1], "o", color="#25c9e8" if side == "L" else "#ff9c3a", ms=6)
     ax[3].set_yticks([0, 1]); ax[3].set_yticklabels(["swipe L", "swipe R"]); ax[3].set_ylim(-0.5, 1.5)
     ax[3].set_xlabel("time (s)")
-    fig.suptitle(f"{tag}: {res['n_swipes']} swipes (L {res['swipes_L']} / R {res['swipes_R']}), "
-                 f"side = eye that saw the onset in {res['side_matches_eye_onset']}/{res['n_swipes']}, "
-                 f"mean population rate {res['mean_pop_rate_hz']:.2f} Hz")
+    title = (f"{tag}: {res['n_swipes']} swipes (L {res['swipes_L']} / R {res['swipes_R']}), "
+             f"side = eye that saw the onset in {res['side_matches_eye_onset']}/{res['n_swipes']}, "
+             f"mean population rate {res['mean_pop_rate_hz']:.2f} Hz")
     for a in ax:
         a.set_facecolor("#111"); a.grid(alpha=0.15)
     fig.patch.set_facecolor("#181818")
     for a in ax:
         a.tick_params(colors="w"); a.yaxis.label.set_color("w"); a.xaxis.label.set_color("w")
-    fig.suptitle(fig._suptitle.get_text(), color="w")
+    fig.suptitle(title, color="w")
     fig.tight_layout()
     fig.savefig(os.path.join(out_dir, f"episode_{tag}.png"), dpi=110)
     print(json.dumps({k: v for k, v in res.items() if k not in ("swipe_times", "meta")}, indent=1))

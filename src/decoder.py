@@ -46,7 +46,7 @@ class DecoderConfig:
     tau_side_s: float = 0.80        # burst mode: trace for the side evidence (remembers the onset)
     burst_hz: float = 0.0           # burst mode: absolute DN population-rate threshold (Hz/cell); 0 = use z
     n_dn: int = 1314
-    n_ol: dict = None               # per-side optic-lobe cell counts for side evidence
+    n_ol: Optional[Dict[str, int]] = None   # per-side optic-lobe cell counts for side evidence
     global_refractory_s: float = 0.30  # minimum gap between any two swipes
 
 
@@ -135,6 +135,7 @@ class Decoder:
                 m = self.pool_masks[p]
                 raw[p] = float(self.feats.fast[m].mean())
         else:
+            assert self.readout is not None, "ridge mode needs a fitted readout"
             for p in ("L", "R"):
                 raw[p] = float(f @ self.readout["w_" + p] + self.readout["b_" + p])
         out = None
@@ -152,6 +153,7 @@ class Decoder:
 
     def _step_burst(self, t: float, aux: Dict[str, int]) -> Optional[str]:
         a = self.a_fast
+        n_ol = self.cfg.n_ol or {"L": 1, "R": 1}
         dn = float(aux.get("dn_L", 0) + aux.get("dn_R", 0))
         self.dn_fast = a * self.dn_fast + (1 - a) * dn
         for p in "LR":
@@ -160,9 +162,9 @@ class Decoder:
             if "med_" + p in aux:
                 # medulla cells (Mi1, Tm1, Tm2, Tm9, L5) one synapse downstream of the driven
                 # lamina cells: strictly ipsilateral, per-cell rate
-                x = float(aux["med_" + p]) / max(1.0, float(self.cfg.n_ol.get(p, 1)))
+                x = float(aux["med_" + p]) / max(1.0, float(n_ol.get(p, 1)))
             elif "ol_" + p in aux:
-                x = (float(aux["ol_" + p]) - float(aux.get("eye_" + p, 0))) / max(1.0, float(self.cfg.n_ol.get(p, 1)))
+                x = (float(aux["ol_" + p]) - float(aux.get("eye_" + p, 0))) / max(1.0, float(n_ol.get(p, 1)))
             else:
                 x = float(aux.get("vpn_" + p, 0))
             self.vpn_fast[p] = self.a_side * self.vpn_fast[p] + (1 - self.a_side) * x
@@ -206,6 +208,7 @@ def fit_ridge(calib_path: str, out_path: str, lambdas=(1, 3, 10, 30, 100, 300, 1
         corr = [np.corrcoef(pred[:, i], Y[~blocks][:, i])[0, 1] for i in range(2)]
         if best is None or np.mean(corr) > best[1]:
             best = (lam, float(np.mean(corr)), r2.tolist(), [float(c) for c in corr])
+    assert best is not None
     lam = best[0]
     W = np.linalg.solve(Xc.T @ Xc + lam * np.eye(F), Xc.T @ Y)
     pred = Xc @ W
