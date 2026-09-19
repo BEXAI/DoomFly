@@ -1,6 +1,8 @@
 # data (multi-GB, downloaded by src/download.py)
 data/raw/
-data/graph/
+data/graph/*
+!data/graph/sets_draft.json
+!data/graph/columns.json
 # reference repos (read-only clones)
 ref/
 # outputs

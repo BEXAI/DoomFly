@@ -1,0 +1,78 @@
+{
+ "annotations": {
+  "file": "data/raw/body-annotations-male-cns-v1.0-minconf-0.5.feather",
+  "id": "bodyId",
+  "type": "type",
+  "superclass": "superclass",
+  "class": "class",
+  "subclass": "subclass",
+  "side_primary": "somaSide",
+  "side_fallback_1": "rootSide",
+  "side_fallback_2": "instance (suffix _L/_R)",
+  "neuromere": "somaNeuromere",
+  "soma_position": "somaLocation",
+  "soma_position_alt": "tosomaLocation",
+  "soma_position_units": "list<int64> [x,y,z] voxel coordinates; unit INFERRED as 8 nm/voxel (extents x 2468-93668, y 4758-68996, z 10154-134531 ~ 1 mm CNS); no unit metadata in file",
+  "ol_hex_columns": [
+   "assignedOlHex1",
+   "assignedOlHex2"
+  ],
+  "status": "status",
+  "status_label": "statusLabel",
+  "instance": "instance",
+  "exit_nerve": "exitNerve",
+  "entry_nerve": "entryNerve"
+ },
+ "neurotransmitters": {
+  "file": "data/raw/body-neurotransmitters-male-cns-v1.0.feather",
+  "id": "body",
+  "prediction": "predicted_nt",
+  "confidence": "predicted_nt_confidence",
+  "celltype_prediction": "celltype_predicted_nt",
+  "celltype_confidence": "celltype_predicted_nt_confidence",
+  "consensus": "consensus_nt",
+  "ground_truth": "ground_truth",
+  "n_predictions": "total_nt_predictions"
+ },
+ "weights": {
+  "file": "data/raw/connectome-weights-male-cns-v1.0-minconf-0.5.feather",
+  "pre": "body_pre",
+  "post": "body_post",
+  "weight": "weight"
+ },
+ "labels": {
+  "vpn_superclass": "visual_projection",
+  "photoreceptor_superclass": "ol_sensory",
+  "photoreceptor_types": [
+   "R1-R6",
+   "R7y",
+   "R8y",
+   "R7p",
+   "R8p",
+   "R7d",
+   "R8d",
+   "R7_unclear",
+   "R8_unclear",
+   "R7R8_unclear"
+  ],
+  "motor_superclasses": [
+   "vnc_motor",
+   "cb_motor"
+  ],
+  "frontleg_mn": "superclass=='vnc_motor' & subclass=='fl' (somaNeuromere T1)",
+  "dn_superclass": "descending_neuron",
+  "MN9_type": "MN9 (superclass cb_motor, subclass pm, exitNerve PhN)",
+  "grn_class": "gustatory",
+  "grn_subclasses": [
+   "labellar bristle",
+   "taste peg",
+   "pharyngeal sensillum",
+   "leg bristle",
+   "wing bristle"
+  ],
+  "grn_sugar_note": "No explicit sugar/bitter label. PROXY grn_sugar = labellar bristle types LB3a-d (strongest 2-hop path GRN->X->MN9; 77 cells). PROXY grn_bitter = LB1a-e (56 cells). LB2*, LB4* small groups (16, 11) likely water/salt/other. Yao&Scott 2022 Sugar SEL PN/LN (GNG540,GNG550,GNG056) and Bitter-SEL (DNg28) recorded in synonyms; Bitter-SEL gets no direct GRN input.",
+  "kc_class": "Kenyon_Cell",
+  "dan_class": "DAN",
+  "mbon_class": "MBON"
+ }
+}

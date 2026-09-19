@@ -303,6 +303,8 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install numpy scipy pandas pyarrow pillow opencv-python-headless matplotlib tqdm imageio imageio-ffmpeg
 python3 src/download.py                                  # ~1.1 GB
 python3 src/build_graph.py                               # ~3 min, peaks ~8 GB RAM
+# build_graph.py reads data/graph/sets_draft.json (bodyId sets derived from the annotations, see docs/RESEARCH_DATA.md);
+# that file and columns.json are committed, everything else under data/ is generated.
 python3 src/validate.py --quick                          # Tests A-C -> out/validate_results.json + figures
 python3 src/run_episode.py --duration 50 --seed 1 --tag final_v2                      # the episode (burst mode is the default)
 python3 src/run_episode.py --duration 50 --tag v2_shuffled --shuffle 0 --no-spikes    # wiring-shuffled control
