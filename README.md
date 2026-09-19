@@ -297,6 +297,54 @@ python3 src/run_episode.py --mode teacher --duration 100 --teacher-gap 1.0 1.8 -
 python3 src/decoder.py fit out/calib/calib.npz out/calib/readout.npz
 ```
 
+## 10. Phase 2 — the fly is free to ignore the phone (`src/arena.py`, `src/run_arena.py`)
+
+The fixed-position loop above cannot show *choice*: the fly is glued to the hinge. Phase 2 puts
+the same brain in a dark 400 × 400 mm box with one open Duo lying flat in the middle and lets it
+walk. Design contract: `docs/ARENA_DESIGN.md`.
+
+**Body.** A correlated random walk that is identical in every condition (12 mm/s, Ornstein–Uhlenbeck
+heading noise σ 1.2 rad/s, τ 0.5 s, wall reflection) is *modulated* by the brain: forward speed
+adds 6 mm/s per Hz of descending-neuron population rate; turning adds 3 rad/s × the normalised
+right-minus-left rate of the DNa descending neurons (26 per side; ipsilateral turn as for DNa02).
+The fly is drawn at 10× scale (30 mm body, 22 mm front-leg reach) so that "over a panel" is a
+meaningful event; the README states this scale wherever it matters.
+
+**Eye.** A panoramic eye replaces the two fixed panels: a 2 mm luminance map of the room (floor
+0.03, walls 0.06, bezel 0.15, the two live feeds pasted onto their 79 × 111 mm panels) sampled by
+each eye as a 24 × 18 grid of log-spaced distance (5–300 mm, nearest row lowest in the visual
+field) × 10° azimuth bins over that eye's hemifield. The grid feeds the unchanged retinotopic
+encoder onto the same L1/L2 lamina cells.
+
+**Swipes.** The same burst rule, but a swipe is applied only if that side's front-leg tip is over a
+panel; otherwise it is logged as blocked. Side evidence is near zero in the arena (both eyes see
+similar scenes), so which panel gets swiped is close to a coin flip decided by the brain.
+
+**Reward and plasticity.** When a novel card appears on a panel while the fly stands on the phone,
+the 316 PAM dopamine neurons are driven at 100 Hz for 300 ms. A dopamine-gated depression rule
+(Tsodyks-style eligibility trace on each Kenyon cell, τ 1 s; every KC→MBON synapse of a recently
+active KC is depressed in proportion to the dopamine its MBON compartment receives *through the
+wiring*, floor 0.2 × w₀, no recovery) acts on the 33,496 KC→MBON edges of the connectome.
+Conditions, five seeds each, 120 s:
+
+| condition | wiring | brain → body | swipes | dopamine |
+|---|---|---|---|---|
+| `real` | MaleCNS | yes | contact-gated | off |
+| `dopamine` | MaleCNS | yes | contact-gated | reward → PAM + plasticity |
+| `shuffled` | wiring-shuffled | yes | contact-gated | off |
+| `random` | MaleCNS (logged only) | **no** (baseline walk) | never applied | off |
+
+Two caveats found while building it, both properties of the model rather than bugs: under the Shiu
+sign convention dopamine neurons are excitatory, so a PAM pulse recruits most Kenyon cells and the
+depression is only ~7× stimulus-specific rather than clean; and spontaneous PAM spikes cause a slow
+weight drift (w/w₀ ≈ 0.999 before any reward). Uniform visual drive of the kind used in Test B does
+not reach the mushroom body at all; patterned drive at the encoder's full range does (KC ≈ 2 Hz,
+MBON ≈ 8 Hz), so the analysis reports the mushroom-body rates actually reached.
+
+### 10.1 Results
+
+_Filled from `out/arena_summary.json` after the sweep._
+
 ## 9. Attribution (CC-BY)
 
 > Connectome: MaleCNS v1.0 — HHMI Janelia FlyEM Project Team, the Cambridge Drosophila
