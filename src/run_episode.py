@@ -4,15 +4,19 @@
 One control step = 16 ms = 8 LIF substeps of 2 ms (as hotocoo/malecns). Per control step:
   1. each panel's frame -> luminance grid -> Poisson rates for that eye's L1/L2(/L3) cells
   2. the brain runs 8 substeps with those cells forced to spike at the requested rates
-  3. spike counts of the ~2,100 output cells (DN + MN) update the decoder features
+  3. population spike counts (DNs, medulla L/R; DN + MN per cell in teacher/ridge/direct) update the decoder
   4. the decoder may emit swipe('L') / swipe('R'); the corresponding feed flicks
   5. the step is logged to events.jsonl; whole-brain spike bits go to spikes.npz
 
 Modes:
+  --mode burst     (default, used for the video) a swipe when the descending-neuron population
+                   rate exceeds --burst-hz, to the side whose medulla is more active. No fit.
   --mode teacher   scripted swipes (calibration data collection); writes calib.npz with
                    features X (T, F) and teacher targets Y (T, 2). No brain->action link.
   --mode ridge     fitted linear readout (out/readout.npz) drives the swipes.
   --mode direct    front-leg motor-neuron pool rates drive the swipes.
+  --scripted L:15,R:15   open-loop evaluation: swipes are scripted per panel block and the
+                   decoder only logs what it would have done (`would_swipe`).
   --shuffle SEED   run on the wiring-shuffled control graph instead (Test C for the loop).
 """
 from __future__ import annotations
@@ -45,9 +49,10 @@ def main():
     ap.add_argument("--std-tau", type=float, default=480.0, help="STD recovery time constant (ms)")
     ap.add_argument("--rate-max", type=float, default=150.0)
     ap.add_argument("--enc-gain", type=float, default=6.0)
+    ap.add_argument("--l3-gain", type=float, default=0.0, help="sustained L3 drive gain (0 = L1/L2 only; L3 columns exist only on the right eye)")
     ap.add_argument("--tonic-hz", type=float, default=0.0, help="spontaneous baseline rate of every driven lamina cell (steady-light activity)")
     ap.add_argument("--grid", type=int, nargs=2, default=(24, 18))
-    ap.add_argument("--threshold", type=float, default=1.0, help="decoder z threshold (default: from readout file or 2.5)")
+    ap.add_argument("--threshold", type=float, default=None, help="z threshold for direct/ridge modes or burst mode with --burst-hz 0 (default: readout file value or 2.5)")
     ap.add_argument("--refractory", type=float, default=0.4)
     ap.add_argument("--tau-side", type=float, default=0.80, help="burst mode: side-evidence trace time constant (s)")
     ap.add_argument("--burst-hz", type=float, default=1.5, help="burst mode: swipe when DN population rate exceeds this (Hz/cell); 0 = z-score trigger")
@@ -102,8 +107,9 @@ def main():
 
     # feeds + eyes
     feedL, feedR = make_pair(args.seed_l, args.seed_r, scale=0.25, autoplay=bool(args.autoplay), autoplay_amp=args.autoplay_amp, autoplay_hz=args.autoplay_hz, autoplay_whole=bool(args.autoplay_whole))
-    encL, encR = make_encoders(grid=tuple(args.grid), rate_max_hz=args.rate_max, gain=args.enc_gain, tonic_hz=args.tonic_hz)
-    print(f"eye L drives {encL.idx_L1.size + encL.idx_L2.size} lamina cells, eye R {encR.idx_L1.size + encR.idx_L2.size}")
+    encL, encR = make_encoders(grid=tuple(args.grid), rate_max_hz=args.rate_max, gain=args.enc_gain, tonic_hz=args.tonic_hz, l3_gain=args.l3_gain)
+    n_drv_L, n_drv_R = encL.encode(feedL.luminance_grid(*args.grid), 0.0)["idx"].size, encR.encode(feedR.luminance_grid(*args.grid), 0.0)["idx"].size
+    print(f"eye L drives {n_drv_L} lamina cells, eye R {n_drv_R} (L1+L2{'+L3' if args.l3_gain > 0 else ''})")
 
     # decoder
     dcfg = DecoderConfig(control_dt_s=control_dt, refractory_s=args.refractory, burst_hz=args.burst_hz, tau_side_s=args.tau_side, n_dn=int(conn.idx("dn_all").size),
@@ -122,7 +128,10 @@ def main():
     meta = dict(meta=dict(seed_l=args.seed_l, seed_r=args.seed_r, mode=args.mode, duration=args.duration,
                           control_dt=control_dt, substeps=substeps, lif=cfg.to_json(), n_neurons=conn.n,
                           n_edges=int(conn.W.nnz), shuffle=args.shuffle, threshold_z=dcfg.threshold_z,
-                          readout_cells=int(readout_cells.size), grid=list(args.grid), rate_max=args.rate_max, tonic_hz=args.tonic_hz, burst_hz=args.burst_hz, autoplay=bool(args.autoplay), autoplay_amp=args.autoplay_amp, autoplay_hz=args.autoplay_hz, autoplay_whole=bool(args.autoplay_whole), enc_gain=args.enc_gain))
+                          readout_cells=int(readout_cells.size), grid=list(args.grid), rate_max=args.rate_max, tonic_hz=args.tonic_hz, burst_hz=args.burst_hz, autoplay=bool(args.autoplay), autoplay_amp=args.autoplay_amp, autoplay_hz=args.autoplay_hz, autoplay_whole=bool(args.autoplay_whole), enc_gain=args.enc_gain,
+                          l3_gain=args.l3_gain, seed=args.seed, refractory_s=args.refractory, global_refractory_s=dcfg.global_refractory_s, warmup_s=dcfg.warmup_s,
+                          tau_side_s=args.tau_side, scripted=args.scripted, teacher_gap=list(args.teacher_gap), teacher_panels=args.teacher_panels,
+                          driven_cells={"L": int(n_drv_L), "R": int(n_drv_R)}))
     ev.write(json.dumps(meta) + "\n")
 
     X, Y = [], []
@@ -165,17 +174,17 @@ def main():
             if panel is not None and t >= next_script:
                 swipe = panel; next_script = t + rng.uniform(*args.teacher_gap)
         y = np.zeros(2, np.float32)
+        swipes_now = [swipe] if swipe else []
         if args.mode == "teacher":
             for i, p in enumerate("LR"):
                 if p in args.teacher_panels and t >= next_teacher[p]:
-                    swipe = p if swipe is None else swipe
+                    swipes_now.append(p)    # both panels may fall due in the same step
                     y[i] = 1.0
                     next_teacher[p] = t + rng.uniform(*args.teacher_gap)
             X.append(dec.last_features.copy()); Y.append(y)
-        if swipe == "L":
-            feedL.swipe(); n_swipes["L"] += 1
-        elif swipe == "R":
-            feedR.swipe(); n_swipes["R"] += 1
+            swipe = swipes_now[0] if swipes_now else None
+        for p in swipes_now:
+            (feedL if p == "L" else feedR).swipe(); n_swipes[p] += 1
 
         ev.write(json.dumps(dict(
             step=k, t=round(t, 4), swipe=swipe, would_swipe=would if script is not None else None,

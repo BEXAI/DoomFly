@@ -14,7 +14,14 @@ def main(dst="data/raw"):
         if os.path.exists(p):
             print("exists", p); continue
         print("downloading", f, flush=True)
-        urllib.request.urlretrieve(f"{BASE}/{f}", p + ".part")
+        url = f"{BASE}/{f}"
+        with urllib.request.urlopen(url) as r:
+            expected = int(r.headers.get("Content-Length", "0"))
+        urllib.request.urlretrieve(url, p + ".part")
+        got = os.path.getsize(p + ".part")
+        if expected and got != expected:
+            os.remove(p + ".part")
+            raise RuntimeError(f"{f}: downloaded {got} bytes, expected {expected}; re-run to retry")
         os.rename(p + ".part", p)
         print("done", f, os.path.getsize(p) // 2**20, "MB", flush=True)
 if __name__ == "__main__":

@@ -872,7 +872,8 @@ class Renderer:
 
         seed_l = int(meta.get("seed_l", 1)) if meta else 1
         seed_r = int(meta.get("seed_r", 2)) if meta else 2
-        self.feed_l, self.feed_r = make_pair(seed_l, seed_r, scale=FEED_SCALE * k)
+        ap_kw = {key: meta[key] for key in ("autoplay", "autoplay_amp", "autoplay_hz", "autoplay_whole") if meta and key in meta}
+        self.feed_l, self.feed_r = make_pair(seed_l, seed_r, scale=FEED_SCALE * k, **ap_kw)
         pw, ph = self.feed_l.out_w, self.feed_l.out_h
 
         self.text = TextRenderer(k)

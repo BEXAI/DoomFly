@@ -124,6 +124,8 @@ def main():
     ap.add_argument("--sets-draft", default=os.path.join(OUT, "sets_draft.json"))
     args = ap.parse_args()
     os.makedirs(OUT, exist_ok=True)
+    with open(args.sets_draft) as f:   # fail early if the draft sets are missing
+        draft = json.load(f)
 
     print("loading annotations + NT ...", flush=True)
     a = load_neurons()
@@ -142,7 +144,8 @@ def main():
     W.sum_duplicates()
     W = W.tocsc()
     W.eliminate_zeros()
-    print(f"edges: {W.nnz:,}  synapses: {abs(W).sum():,.0f}  inhibitory edge fraction: {(W.data<0).mean():.3f}  self-edges dropped: {self_edges}")
+    n_syn = int(np.abs(W.data).astype(np.int64).sum())
+    print(f"edges: {W.nnz:,}  synapses: {n_syn:,}  inhibitory edge fraction: {(W.data<0).mean():.3f}  self-edges dropped: {self_edges}")
     sp.save_npz(os.path.join(OUT, "W.npz"), W)
     np.save(os.path.join(OUT, "ids.npy"), ids)
 
@@ -157,8 +160,6 @@ def main():
     np.save(os.path.join(OUT, "positions.npy"), pos)
 
     # ---- sets
-    with open(args.sets_draft) as f:
-        draft = json.load(f)
     sets = {k: [int(b) for b in v if int(b) in body_to_idx] for k, v in draft.items() if not k.startswith("_")}
     bid = a["bodyId"]
     for side_name, side in (("left", "L"), ("right", "R")):
@@ -176,7 +177,6 @@ def main():
     sets["mn_vnc"] = bid[a.superclass == "vnc_motor"].astype(int).tolist()
     sets["dn_all"] = bid[a.superclass == "descending_neuron"].astype(int).tolist()
     sets["MN9"] = bid[a.type == "MN9"].astype(int).tolist()
-    sets["all_neurons_count"] = [n]
     with open(os.path.join(OUT, "sets.json"), "w") as f:
         json.dump(sets, f)
     print("sets:", {k: len(v) for k, v in sets.items() if k.startswith(("eye_left_L", "eye_right_L", "mn_front", "dn_", "vpn", "grn_s", "MN9", "t4"))})
@@ -203,7 +203,7 @@ def main():
     groups[idx("mn_frontleg_right")] = 4
     np.save(os.path.join(OUT, "groups.npy"), groups)
 
-    stats = dict(n_neurons=int(n), n_edges=int(W.nnz), n_synapses=float(abs(W).sum()),
+    stats = dict(n_neurons=int(n), n_edges=int(W.nnz), n_synapses=n_syn,
                  min_weight=args.min_weight, unknown_sign=args.unknown_sign,
                  inhibitory_edge_fraction=float((W.data < 0).mean()),
                  sign_counts=dict(exc=int((sign > 0).sum()), inh=int((sign < 0).sum()), zero=int((sign == 0).sum())),

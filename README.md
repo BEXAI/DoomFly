@@ -59,14 +59,14 @@ Reference-implementation notes (Shiu constants, sign conventions, licences): `do
 | choice | value |
 |---|---|
 | neurons kept | every body with a non-null `superclass` → **166,700** |
-| edges kept | synapse count ≥ 5, both ends kept, 33 self-edges dropped → **6,242,085 edges, 89,859,936 synapses** |
+| edges kept | synapse count ≥ 5, both ends kept, 33 self-edges dropped → **6,242,085 edges, 89,859,938 synapses** |
 | sign | presynaptic `consensus_nt`: ACh, DA, OA, 5-HT → +1; GABA, glutamate (GluCl, Liu & Wilson 2013), histamine → −1; unclear/missing (3,177 cells) → +1 |
 | inhibitory edge fraction | **37.2 %** |
 | NT counts | ACh 103,720 · Glu 29,302 · GABA 22,069 · His 7,891 · unclear 2,999 · DA 392 · OA 101 · 5-HT 48 · missing 178 |
 | side | `somaSide` → `rootSide` (sensory cells) → `instance` suffix `_L/_R` |
 | soma positions | `somaLocation` × 8 nm for 139,662 cells; 26,236 more filled by the mean of synaptic partners (4 rounds); 802 unknown |
 
-These match the community builds (hotocoo/malecns: 166,700 / 6,242,118 / 89.86 M).
+These match the community builds: hotocoo/malecns reports 166,700 neurons and 6,242,118 edges (89.86 M synapses); the 33-edge difference is exactly the self-edges dropped here.
 
 ### Neuron sets (`data/graph/sets.json`)
 
@@ -100,15 +100,15 @@ Shiu et al. (Nature 2024) LIF constants, verified line-by-line against
 |---|---|
 | V_rest = V_reset | −52 mV |
 | V_threshold | −45 mV |
-| refractory | 2.2 ms (→ 1 step at dt = 2 ms) |
+| refractory | 2.2 ms (→ 1 step at dt = 2 ms; a cell can fire again two steps after a spike, i.e. a 250 Hz ceiling) |
 | membrane τ | 20 ms |
 | synaptic τ (exponential) | 5 ms |
-| PSP per synapse | 0.275 mV peak (τ_m/τ_s pre-compensation as hotocoo) |
+| synaptic weight | 0.275 mV per synapse, integrated (τ_m/τ_s pre-compensation as hotocoo; the peak PSP of one synapse at dt = 2 ms is ≈ 0.15 mV) |
 | synaptic delay | 1.8 ms (→ 1 step) |
 | dt / control step | 2 ms / 16 ms (8 substeps) |
-| **`weight_scale`** | **0.5** (Test B) |
+| **`weight_scale`** | **0.5**, set by the closed-loop probes with depression (§5.2); Test B without depression recommends 0.4 |
 | spike-frequency adaptation | 0.6 mV, τ 120 ms (hotocoo's addition; 0 = pure Shiu) |
-| **short-term depression** (Tsodyks–Markram, one resource per presynaptic neuron) | **U = 0.15 per spike, recovery 480 ms** (TheMrRaGe/flybrain measured U = 0.08, τ 480 ms; it must be global) |
+| **short-term depression** (Tsodyks–Markram, one resource per presynaptic neuron) | **U = 0.15 per spike, recovery 480 ms** (TheMrRaGe/flybrain measured U = 0.08, τ 480 ms; it must be global). The resource is depleted at spike time and weights delivery one step later, so a rested cell transmits 0.85 of its weight; the effective gain of a first spike is therefore 0.5 × 0.85 ≈ 0.43 |
 
 Sensory input follows Shiu: driven cells are forced to spike as Poisson processes at the
 requested rate; everything downstream is the wiring. The step is a sparse column gather on the
@@ -132,7 +132,8 @@ rate = clip(6·|c|, 0, 1) × 150 Hz. Static frames go silent within ~1 s; a swip
 
 **Decoder (`src/decoder.py`, mode `burst`, no fit).** Two population signals, both real neurons:
 1. *Trigger*: an 80 ms trace of the spike rate of all **1,314 descending neurons**. When it exceeds
-   **1.5 Hz per cell** (baseline is 0), a swipe is emitted (≥ 400 ms per panel, ≥ 300 ms globally).
+   **1.5 Hz per cell** (baseline is 0), a swipe is emitted (≥ 400 ms per panel, ≥ 300 ms globally,
+   none in the first second).
 2. *Side*: an 800 ms trace of the per-cell rate of the **left vs right medulla** (Mi1/Tm1/Tm2/Tm9/L5,
    one synapse downstream of the driven lamina cells). The panel of the more active medulla is swiped.
 
@@ -147,6 +148,8 @@ All numbers below are printed from `docs/validate_results.json`, `docs/episode_*
 
 ### 5.1 Test A — Shiu benchmark (sugar → MN9), `src/validate.py`
 
+Tests A–C run **without** short-term depression (it was added after them, for the closed loop); the depression regime is characterised by the closed-loop probes in §5.2.
+
 78 sugar-proxy GRNs at 150 Hz for 1 s; MN9 rate (Hz per cell) during the drive; baseline 0 Hz.
 
 | weight_scale | sugar | sugar + bitter | bitter | population rate | state |
@@ -155,7 +158,7 @@ All numbers below are printed from `docs/validate_results.json`, `docs/episode_*
 | 0.5 | 186.5 | 76.0 | 114.5 | 13.7 Hz | runaway |
 | 0.3 | 147.0 | 89.5 | 23.0 | 8 Hz plateau | latched |
 | 0.15 | 107.5 | 0.0 | 0.0 | 2.7 Hz | latched at 3 Hz after drive |
-| 0.15 + adapt 0.6 | 13.5 | 0.0 | 0.0 | 0.95 Hz | ~quiescent after drive |
+| 0.15 + adapt 0.6 | 13.5 | 0.0 | 0.0 | 0.95 Hz | 0.9 Hz after drive (below the 1 Hz latch criterion) |
 
 Bitter suppresses MN9 at every scale, most cleanly at 0.15 (108 → 0 Hz). Absolute MN9 rates
 are physiological only with adaptation. The sugar/bitter sets are proxies (§2), so this is a
@@ -164,7 +167,7 @@ consistency check, not a reproduction of Shiu's exact experiment. Figure: `docs/
 ### 5.2 Test B — runaway, silence, and the operating point
 
 * No input, 1 s: **0 spikes** at every configuration (no noise term).
-* Left-eye drive (L1+L2 at 60 Hz, 1.5 s), no depression: population rate 26 Hz at scale 1.0,
+* Left-eye drive (all 1,770 left L1+L2 cells at 60 Hz, 1.5 s), no depression: population rate 26 Hz at scale 1.0,
   15.6 Hz at 0.5 (both latched, persisting after the drive stops); ≤ 1.2 Hz and dying instantly
   at ≤ 0.4. The cliff is between 0.4 and 0.5. But at ≤ 0.4 **nothing leaves the optic lobe**
   (VPN 0.02 Hz, DN 0.00 Hz, motor 0).

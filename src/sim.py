@@ -189,7 +189,10 @@ class Brain:
         self.refrac[self.refrac > 0] -= 1
         self.refrac[fired] = self.ref_steps
         if c.std_u:
-            # resource recovers toward 1, and each spike consumes a fraction U of what is left
+            # resource recovers toward 1, and each spike consumes a fraction U of what is left.
+            # Note the order: the resource is depleted at spike time and the depleted value is
+            # what weights delivery one delay step later, so a spike from a rested cell transmits
+            # (1 - U) of its full weight (0.85 at U = 0.15). Documented in README §3.
             self.std_x += (1.0 - self.std_x) * (c.dt_ms / c.std_tau_rec_ms)
             self.std_x[fired] *= (1.0 - c.std_u)
 

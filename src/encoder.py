@@ -132,7 +132,7 @@ class EyeEncoder:
         tau_adapt_s: float = 0.25,
         gain: float = 6.0,
         tonic_hz: float = 0.0,
-        l3_gain: float = 0.3 * 0.3,
+        l3_gain: float = 0.0,
         flip: bool = False,
         mirror: bool = False,
         bg_init: str = "frame",
@@ -301,7 +301,7 @@ def _self_test(args: argparse.Namespace) -> None:
     fps = args.fps
     n = int(round(args.seconds * fps))
     dt = 1.0 / fps
-    feedL, feedR = make_pair()
+    feedL, feedR = make_pair(autoplay=False)  # static feeds: the test checks adaptation
     swipes_l = {int(round(t * fps)) for t in (0.5, 1.8)}
 
     ts = np.arange(n) * dt

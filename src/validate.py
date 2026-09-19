@@ -175,8 +175,9 @@ def test_A(conn: Connectome, factor: float, configs: List[Tuple[float, float]]) 
                 "driven_rate_hz_check": rate_hz(counts["grn_sugar"] if cname != "bitter" else counts["grn_bitter"],
                                                 sugar.size if cname != "bitter" else bitter.size, dt_s, drv),
                 "pop_rate_hz_drive": rate_hz(counts["all"], conn.n, dt_s, drv),
-                "pop_rate_hz_drive_excluding_driven": (counts["all"][drv].sum() - counts["grn_sugar"][drv].sum()
-                                                       - counts["grn_bitter"][drv].sum()) / (conn.n - n_drive) / (drive_steps * dt_s),
+                "pop_rate_hz_drive_excluding_driven": (counts["all"][drv].sum()
+                                                       - (counts["grn_sugar"][drv].sum() if cname != "bitter" else 0)
+                                                       - (counts["grn_bitter"][drv].sum() if cname != "sugar" else 0)) / (conn.n - n_drive) / (drive_steps * dt_s),
                 "frac_neurons_fired_once": float(ever.sum() / conn.n),
                 "n_neurons_fired_once": int(ever.sum()),
                 "total_spikes": int(counts["all"].sum()),
@@ -263,7 +264,7 @@ def test_B(conn: Connectome, factor: float, configs: List[Tuple[float, float]]) 
     silent_steps = int(round(500 * factor))
     eye_steps = int(round(750 * factor))
     post_steps = int(round(150 * factor))
-    out: Dict[str, Any] = {"silence": {}, "eye_drive": {}, "criterion": "pop mean rate over last 0.5 s of drive < 5 Hz, not rising (last quarter <= 1.2x previous quarter), and not latched (pop rate > 1 Hz 0.15-0.3 s after drive off)"}
+    out: Dict[str, Any] = {"silence": {}, "eye_drive": {}, "criterion": "pop mean rate over last 0.5 s of drive < 5 Hz, not rising (second 0.25 s half of the window <= 1.2x the first half, or below 0.5 Hz), and not latched (pop rate > 1 Hz 0.15-0.3 s after drive off)"}
     for ws, adapt in configs:
         key = cfg_label(ws, adapt)
         cfg = LIFConfig(weight_scale=ws, adapt_mv=adapt)
@@ -344,8 +345,7 @@ def fig_A(resA: Dict, path: str) -> None:
     import matplotlib.pyplot as plt
     keys = list(resA["configs"].keys())
     cols = {"sugar": C_BLUE, "sugar+bitter": C_ORANGE, "bitter": C_AQUA}
-    fig, axes = plt.subplots(2, len(keys), figsize=(3.6 * len(keys), 5.6), sharex=True, facecolor=SURFACE)
-    axes = np.atleast_2d(axes)
+    fig, axes = plt.subplots(2, len(keys), figsize=(3.6 * len(keys), 5.6), sharex=True, facecolor=SURFACE, squeeze=False)
     base_s = resA["protocol"]["baseline_s"]
     for j, key in enumerate(keys):
         tr = resA["traces"][key]

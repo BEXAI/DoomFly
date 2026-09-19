@@ -387,15 +387,18 @@ class Feed:
             h_i = (self.seed * 1_000_003 + i * 7919) & 0x7FFFFFFF
             if spec["kind"] == "novel":
                 y0, y1 = top, top + spec["h"]
-                period, amp = self.novel_hz and 1.0 / self.novel_hz, self.novel_amp
+                period, amp = (1.0 / self.novel_hz if self.novel_hz > 0 else 0.0), self.novel_amp
             elif spec.get("image") is not None:
                 if self.autoplay_whole:
                     y0, y1 = top, top + spec["h"]
                 else:
                     y0, y1 = top + spec["image"]["y0"], top + spec["image"]["y1"]
-                period = (1.0 / self.autoplay_hz) * (0.7 + 0.6 * ((h_i >> 8) % 1000) / 1000.0)
+                period = (1.0 / self.autoplay_hz if self.autoplay_hz > 0 else 0.0) * (0.7 + 0.6 * ((h_i >> 8) % 1000) / 1000.0)
                 amp = self.autoplay_amp
             else:
+                i += 1
+                continue
+            if period <= 0.0:   # hz <= 0 means this content never cuts
                 i += 1
                 continue
             phase = period * (((h_i >> 4) % 1000) / 1000.0)

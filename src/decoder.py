@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """Motor readout: connectome output-neuron activity -> swipe events.
 
-Two modes, both operating only on spikes of real MaleCNS output neurons
-(descending neurons + motor neurons, ~2,100 cells):
+Four modes (teacher / direct / burst / ridge), all operating only on spikes of real MaleCNS
+neurons. `burst` is the one used for the video:
 
   direct  The mean rate of the front-left / front-right leg motor-neuron pools is
           low-passed, z-scored against a running baseline, and a swipe is emitted on
           the panel of the pool whose z crosses `threshold` (refractory >= 250 ms).
           Used when the leg MNs respond to visual drive on their own.
 
-  burst   No fit. A swipe is triggered when the z-scored fast trace of the whole
-          descending-neuron population crosses `threshold` (a DN burst); the panel is the
+  burst   No fit. A swipe is triggered when the 80 ms trace of the whole descending-neuron
+          population rate exceeds `burst_hz` Hz per cell (default in run_episode: 1.5 Hz; with
+          burst_hz = 0 a z-scored trigger at `threshold_z` is used instead); the panel is the
           side whose medulla (Mi1/Tm1/Tm2/Tm9/L5, one synapse downstream of the driven
           lamina cells, per cell) carried more of the recent activity, i.e. the eye that saw the
           change. Uses only real-neuron spike counts; nothing is fitted.
@@ -111,11 +112,7 @@ class Decoder:
         self.a_fast = float(np.exp(-cfg.control_dt_s / cfg.tau_fast_s))
         self.a_side = float(np.exp(-cfg.control_dt_s / cfg.tau_side_s))
         self.dn_fast = 0.0
-        self.vpn_fast = {"L": 0.0, "R": 0.0}
-        # per-side normalisation of the side evidence (removes the structural L/R bias of
-        # the reconstruction: the right optic lobe carries ~10% more synapses)
-        self.z_side = {"L": RunningZ(cfg.tau_baseline_s, cfg.control_dt_s),
-                       "R": RunningZ(cfg.tau_baseline_s, cfg.control_dt_s)}
+        self.side_fast = {"L": 0.0, "R": 0.0}
         if self.cfg.n_ol is None:
             self.cfg.n_ol = {"L": 1, "R": 1}
         self.last_side_evidence = 0.0
@@ -123,12 +120,12 @@ class Decoder:
     def step(self, t: float, counts: np.ndarray, aux: Optional[Dict[str, int]] = None) -> Optional[str]:
         """counts: spikes of each readout cell this control step; aux: population spike
         counts this step (needs 'dn_L','dn_R','vpn_L','vpn_R' for burst mode)."""
+        if self.mode == "burst":   # burst mode reads population counts only
+            return self._step_burst(t, aux or {})
         f = self.feats.update(counts)
         self.last_features = f
         if self.mode == "teacher":
             return None
-        if self.mode == "burst":
-            return self._step_burst(t, aux or {})
         raw = {}
         if self.mode == "direct":
             for p in ("L", "R"):
@@ -167,17 +164,19 @@ class Decoder:
                 x = (float(aux["ol_" + p]) - float(aux.get("eye_" + p, 0))) / max(1.0, float(n_ol.get(p, 1)))
             else:
                 x = float(aux.get("vpn_" + p, 0))
-            self.vpn_fast[p] = self.a_side * self.vpn_fast[p] + (1 - self.a_side) * x
+            self.side_fast[p] = self.a_side * self.side_fast[p] + (1 - self.a_side) * x
         if self.cfg.burst_hz > 0:
-            # DN population rate in Hz per cell (fast trace of spikes per control step)
-            z = self.dn_fast / (self.cfg.n_dn * self.cfg.control_dt_s) / self.cfg.burst_hz * self.cfg.threshold_z
+            # absolute trigger: DN population rate in Hz per cell vs `burst_hz`; `z` is logged in Hz
+            z = self.dn_fast / (self.cfg.n_dn * self.cfg.control_dt_s)
+            thr = self.cfg.burst_hz
         else:
             z = self.z_dn.update(self.dn_fast)
-        ev = self.vpn_fast["L"] - self.vpn_fast["R"]   # raw per-cell medulla rate difference
+            thr = self.cfg.threshold_z
+        ev = self.side_fast["L"] - self.side_fast["R"]   # raw per-cell medulla rate difference
         self.last_side_evidence = ev
         # expose per-panel values for logging: burst signal assigned to the evidenced side
         self.last_value = {"L": z if ev >= 0 else 0.0, "R": z if ev < 0 else 0.0}
-        if t < self.cfg.warmup_s or z <= self.cfg.threshold_z:
+        if t < self.cfg.warmup_s or z <= thr:
             return None
         if abs(ev) < 1e-6:
             return None
