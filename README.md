@@ -186,7 +186,7 @@ consistency check, not a reproduction of Shiu's exact experiment. Figure: `docs/
   descending neurons are silent between events and burst on each visual onset (62 DN spikes per
   step in the 300 ms after a swipe vs 8 before; 0 in quiet periods). U = 0.08 at 0.5 still latched
   (162 vs 131). This is the operating point used everywhere below. Mean population rate in the
-  50 s episodes: 0.33–0.67 Hz; DN rate at swipe 7.9–10.7 Hz per cell vs 1.3–2.4 Hz one second earlier.
+  50 s episodes: 0.33–0.67 Hz; DN rate at swipe 7.9–10.7 Hz per cell vs 0.5–0.9 Hz one second earlier.
 
 Figure: `docs/figures/validate_B_lateral.png`.
 
@@ -223,12 +223,12 @@ Six 50 s runs at the operating point, differing only in the Poisson seed:
 
 | seed | swipes | L / R | longest quiet gap | side = eye that saw the onset¹ | DN at swipe vs 1 s before | mean rate |
 |---|---|---|---|---|---|---|
-| 0 | 27 | 9 / 18 | 5.4 s | 67 % | 8.6 / 1.5 Hz | 0.67 Hz |
-| **1 (video)** | **28** | **14 / 14** | **5.2 s** | **96 %** | 7.9 / 2.4 Hz | 0.62 Hz |
-| 2 | 27 | 2 / 25 | 6.0 s | 81 % | 9.3 / 1.3 Hz | 0.57 Hz |
-| 3 | 17 | 1 / 16 | 11.7 s | 76 % | 10.1 / 2.1 Hz | 0.49 Hz |
-| 4 | 9 | 0 / 9 | 28.1 s | 89 % | 8.1 / 1.6 Hz | 0.35 Hz |
-| 5 | 9 | 0 / 9 | 33.4 s | 100 % | 10.7 / 1.4 Hz | 0.33 Hz |
+| 0 | 27 | 9 / 18 | 5.4 s | 67 % | 8.6 / 0.8 Hz | 0.67 Hz |
+| **1 (video)** | **28** | **14 / 14** | **5.2 s** | **96 %** | 7.9 / 0.6 Hz | 0.62 Hz |
+| 2 | 27 | 2 / 25 | 6.0 s | 81 % | 9.3 / 0.5 Hz | 0.57 Hz |
+| 3 | 17 | 1 / 16 | 11.7 s | 76 % | 10.1 / 0.5 Hz | 0.49 Hz |
+| 4 | 9 | 0 / 9 | 28.1 s | 89 % | 8.1 / 0.7 Hz | 0.35 Hz |
+| 5 | 9 | 0 / 9 | 33.4 s | 100 % | 10.7 / 0.9 Hz | 0.33 Hz |
 
 ¹ fraction of swipes whose panel had the larger eye drive in the preceding 256 ms (ties do not
 count); confounded in closed loop because the swipe itself is the strongest onset, hence the
@@ -297,7 +297,7 @@ python3 src/run_episode.py --mode teacher --duration 100 --teacher-gap 1.0 1.8 -
 python3 src/decoder.py fit out/calib/calib.npz out/calib/readout.npz
 ```
 
-## 10. Phase 2 — the fly is free to ignore the phone (`src/arena.py`, `src/run_arena.py`)
+## 9. Phase 2 — the fly is free to ignore the phone (`src/arena.py`, `src/run_arena.py`)
 
 The fixed-position loop above cannot show *choice*: the fly is glued to the hinge. Phase 2 puts
 the same brain in a dark 400 × 400 mm box with one open Duo lying flat in the middle and lets it
@@ -337,21 +337,21 @@ Conditions, five seeds each, 120 s:
 Two caveats found while building it, both properties of the model rather than bugs: under the Shiu
 sign convention dopamine neurons are excitatory, so a PAM pulse recruits most Kenyon cells and the
 depression is only ~7× stimulus-specific rather than clean; and spontaneous PAM spikes cause a slow
-weight drift (w/w₀ ≈ 0.999 before any reward). Uniform visual drive of the kind used in Test B does
+weight drift (w/w₀ ≈ 0.998 over 120 s without any reward). Uniform visual drive of the kind used in Test B does
 not reach the mushroom body at all; patterned drive at the encoder's full range does (KC ≈ 2 Hz,
 MBON ≈ 8 Hz), so the analysis reports the mushroom-body rates actually reached.
 
-### 10.1 Results (`docs/arena/arena_summary.json`, five seeds × 120 s per condition)
+### 9.1 Results (`docs/arena/arena_summary.json`, five seeds × 120 s per condition)
 
 | condition | time on phone | visits | swipes applied | swipes blocked | 1st half → 2nd half | final KC→MBON w/w₀ |
 |---|---|---|---|---|---|---|
 | real | 8 % [1, 16] | 1.2 | 4.0 | 30.6 | 5 % → 10 % | 1.000 |
-| **dopamine** | **12 % [3, 28]** | **2.0** | **6.0** | 30.8 | 6 % → 18 % | **0.989** |
+| **dopamine** | **12 % [3, 27]** | **2.0** | **6.0** | 30.8 | 6 % → 18 % | **0.989** |
 | shuffled | 6 % [1, 10] | 1.2 | 4.4 | 26.6 | 8 % → 3 % | 1.000 |
 | random walker | 20 % [0, 46] | 1.0 | 0 (never applied) | 34.2 | 19 % → 21 % | 1.000 |
 
 Brackets are 95 % bootstrap intervals across seeds. Dopamine minus real, paired by seed:
-+4.3 percentage points of time on the phone [−7.6, +19.6], +0.8 visits [+0.2, +1.4], learning
++4.3 percentage points of time on the phone [−7.6, +18.8], +0.8 visits [+0.2, +1.4], learning
 (second-half minus first-half gain) +6.6 points [−13.5, +30.4]; exact sign-flip p = 0.75 and 0.63.
 Real vs random walker: −12 points, permutation p = 0.45. Real vs shuffled: +2 points, p = 0.70.
 
@@ -362,14 +362,14 @@ the real brain is silent (a dark static room gives no visual onsets, so no desce
 the fly is just the baseline walker. When it steps onto the phone and sees the feed cut or scroll,
 the descending burst that triggers a swipe also raises walking speed (the DN → speed mapping,
 inherited from car-driving connectome projects), so the fly tends to run off the screen right after
-touching it. A real fly startled by motion is more likely to stop and orient. Every visit that did
-produce swipes was short (median 3–13 s).
+touching it. A real fly startled by motion is more likely to stop and orient. Visits that produced
+swipes had a median length of 5–6 s (range 0.5–31 s).
 
-The dopamine condition is consistently, but not significantly, more "engaged": more visits in every
-seed, more applied swipes, and its time-on-phone rises from the first to the second half while the
+The dopamine condition is consistently, but not significantly, more "engaged": at least as many visits in
+every seed (strictly more in 3 of 5), more applied swipes, and its time-on-phone rises from the first to the second half while the
 real condition barely changes. The synaptic weights moved by only 1.1 % on average (the reward
 fired 0–4 times per run), so this is an effect of a few rewards on a mostly silent mushroom body
-(KC ≈ 0.27 Hz, MBON ≈ 1.2 Hz, PAM 0.06 Hz off-phone). Novel-card approach could not be measured:
+(KC ≈ 0.27 Hz, MBON ≈ 1.2 Hz; PAM ≈ 0.06 Hz in the conditions without reward drive). Novel-card approach could not be measured:
 almost no novel cuts happened while the fly was off the phone and within 2 s of reaching it.
 
 What would make this a real experiment rather than a pilot: (1) a DN → *stop-and-orient* mapping
@@ -383,7 +383,7 @@ Figures: `docs/figures/arena_trajectories.png`, `arena_time_on_phone.png`, `aren
 `arena_w_ratio.png`. Video: `python3 src/render_arena.py --events out/arena_dopamine_s4.jsonl ...`
 (the most eventful run: 5 visits, 17 swipes, 4 rewards, 42 % of the time on the phone).
 
-## 9. Attribution (CC-BY)
+## 10. Attribution (CC-BY)
 
 > Connectome: MaleCNS v1.0 — HHMI Janelia FlyEM Project Team, the Cambridge Drosophila
 > Connectomics Group (University of Cambridge / MRC Laboratory of Molecular Biology), and Google
@@ -399,3 +399,4 @@ Suggested caption: *A real fruit-fly connectome (MaleCNS v1.0, 166,700 neurons) 
 spiking network, doomscrolling two feeds at once — one per eye, one per leg. Every swipe is a
 burst of the fly's own descending neurons, sent to the side whose eye saw the change. Nothing
 scripted, nothing fitted. Data CC-BY Janelia FlyEM · Cambridge · Google.*
+
