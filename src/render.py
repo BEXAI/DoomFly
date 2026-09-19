@@ -1166,7 +1166,6 @@ class Renderer:
         writer = imageio.get_writer(args.out, fps=out_fps, codec="libx264", quality=8, pixelformat="yuv420p",
                                     macro_block_size=1, ffmpeg_params=["-preset", args.preset])
         t_start = time.perf_counter()
-        t_last = t_start
         n_written = 0
         next_report = 5.0
         print(f"rendering {self.n_frames} frames ({self.duration:.1f} s) at {self.W}x{self.H}, "
@@ -1196,7 +1195,6 @@ class Renderer:
                     eta = (self.n_frames - idx - 1) / self.frame_step / max(fps_wall, 1e-6)
                     print(f"  t={t_video:5.1f}s  frames={n_written}  {fps_wall:5.1f} fps  eta {eta:5.1f}s", flush=True)
                     next_report += 5.0
-                    t_last = now
         finally:
             writer.close()
         elapsed = time.perf_counter() - t_start

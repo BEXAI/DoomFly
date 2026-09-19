@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 
 import matplotlib
 matplotlib.use("Agg")
@@ -101,5 +100,10 @@ def analyse(tag: str, out_dir: str = os.path.join(ROOT, "out")) -> dict:
 
 
 if __name__ == "__main__":
-    for tag in sys.argv[1:] or ["final"]:
-        analyse(tag)
+    import argparse
+    ap = argparse.ArgumentParser(description="Summarise episode logs: swipe statistics, side check, DN/swipe timing, figure.")
+    ap.add_argument("tags", nargs="*", default=["final"], help="episode tags (out/events_<tag>.jsonl)")
+    ap.add_argument("--out-dir", default=os.path.join(ROOT, "out"))
+    a = ap.parse_args()
+    for tag in a.tags:
+        analyse(tag, a.out_dir)

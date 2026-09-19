@@ -27,7 +27,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, asdict
-from typing import Dict, Iterable, List, Optional, Sequence
+from typing import Dict, List, Optional
 
 import numpy as np
 import scipy.sparse as sp

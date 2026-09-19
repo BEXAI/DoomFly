@@ -34,7 +34,6 @@ import time
 
 import numpy as np
 import pandas as pd
-import pyarrow as pa
 import pyarrow.ipc as ipc
 import scipy.sparse as sp
 
