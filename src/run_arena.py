@@ -4,7 +4,8 @@
 Per 16 ms control step (8 LIF substeps of 2 ms):
   1. feeds -> panel luminance grids (55 x 39) pasted into the room map; the panoramic eye
      samples (24, 18) = (distance, azimuth) grids for the left / right eye from the fly's pose
-  2. EyeEncoder (L1 ON / L2 OFF only, l3_gain 0) turns each grid into Poisson rates
+  2. EyeEncoder (L1 ON / L2 OFF only, l3_gain 0, flip=True so the nearest distance row lands
+     on the ventral retina) turns each grid into Poisson rates
   3. the brain runs 8 substeps with those lamina cells forced; in condition `dopamine` the PAM
      set is additionally forced at 100 Hz during a 300 ms reward window
   4. population counts -> Decoder('burst'): DN population rate > 1.5 Hz/cell picks a side by
@@ -12,11 +13,16 @@ Per 16 ms control step (8 LIF substeps of 2 ms):
      (the panel under the tip is swiped), otherwise logged as swipe_blocked
   5. Body.step with the 80 ms traces (Hz per cell) of DN, DNa-left and DNa-right rates
   6. feeds.step; reward = rising edge of novel_visible on either panel while on the phone
-  7. one JSON line per step (schema in docs/ARENA_DESIGN.md "Log format")
+  7. one JSON line per step (schema in docs/ARENA_DESIGN.md "Log format"); pose, on_phone,
+     dist_mm and reach are all the post-step values (the swipe gate uses the pre-step reach)
 
 Conditions: real | dopamine | shuffled | random  (see the contract). `random` keeps the brain
-running and logged but disconnects it from the body (g_v = g_omega = 0) and from the feeds:
+running and logged but disconnects it from the body (Body(connected=False): no speed or
+steering modulation and no standing rule; g_v = g_omega = 0 as well) and from the feeds:
 decoder bursts are logged as `swipe_blocked` and never applied.
+
+Random streams: `SeedSequence(seed).spawn(2)` -> [0] brain (forced Poisson spikes), [1] body
+(start pose, OU heading noise, wall kicks); feeds use RandomState(2*seed+1 / 2*seed+2).
 
     python3 src/run_arena.py --condition real --duration 120 --seed 0 [--spikes] [--out-dir out]
 """
@@ -118,7 +124,8 @@ def main() -> None:
     os.makedirs(args.out_dir, exist_ok=True)
     tag = f"arena_{cond}_s{args.seed}"
     log_path = os.path.join(args.out_dir, f"{tag}.jsonl")
-    rng = np.random.default_rng(args.seed)
+    seed_brain, seed_body = np.random.SeedSequence(args.seed).spawn(2)
+    rng = np.random.default_rng(seed_body)      # body: start pose, OU noise, wall kicks
     n_steps = int(round(args.duration / CONTROL_DT))
 
     # ---------------- brain
@@ -128,7 +135,7 @@ def main() -> None:
         print(f"using wiring-shuffled control graph (seed {args.shuffle_seed})", flush=True)
         conn = conn.shuffled(args.shuffle_seed)
     cfg = LIFConfig(weight_scale=args.weight_scale, adapt_mv=args.adapt_mv, std_u=args.std_u, std_tau_rec_ms=args.std_tau)
-    brain = Brain(conn, cfg, seed=args.seed)
+    brain = Brain(conn, cfg, seed=seed_brain)
 
     dna_sets = load_dna_sets()
     dna_L, dna_R = conn.idx(dna_sets["dna_left"]), conn.idx(dna_sets["dna_right"])
@@ -147,8 +154,11 @@ def main() -> None:
         "med_L": med("left"), "med_R": med("right"),
     }
     LOG_POPS = ("eye_L", "eye_R", "dn_L", "dn_R", "dna_L", "dna_R", "leg_L", "leg_R", "kc", "mbon", "pam")
-    n_dn = int(conn.idx("dn_all").size)
-    print(f"sets: DN {n_dn} | DNa L {dna_L.size} R {dna_R.size} ({dna_source}) | KC {pops['kc'].size} MBON {pops['mbon'].size} PAM {pops['pam'].size}", flush=True)
+    # Hz per cell of the DN population uses the cells that are actually counted (dn_L + dn_R);
+    # dn_all also holds a few unsided DNs that no population count includes.
+    n_dn = int(np.union1d(pops["dn_L"], pops["dn_R"]).size)
+    n_dn_all = int(conn.idx("dn_all").size)
+    print(f"sets: DN {n_dn} sided of {n_dn_all} | DNa L {dna_L.size} R {dna_R.size} ({dna_source}) | KC {pops['kc'].size} MBON {pops['mbon'].size} PAM {pops['pam'].size}", flush=True)
 
     # ---------------- plasticity (dopamine condition only)
     plasticity_on = False
@@ -168,14 +178,17 @@ def main() -> None:
     # ---------------- world
     phone = Phone()
     x0, y0, th0 = random_start_pose(rng, phone, min_dist=args.start_min_dist)
-    g_v, g_omega = (0.0, 0.0) if cond == "random" else (args.g_v, args.g_omega)
-    body = Body(phone, rng, x0, y0, th0, v0=args.v0, g_v=g_v, g_omega=g_omega)
+    connected = cond != "random"
+    g_v, g_omega = (args.g_v, args.g_omega) if connected else (0.0, 0.0)
+    body = Body(phone, rng, x0, y0, th0, v0=args.v0, g_v=g_v, g_omega=g_omega, connected=connected)
     eye = PanoramicEye(phone)
     seed_l, seed_r = 2 * args.seed + 1, 2 * args.seed + 2
     feedL, feedR = make_pair(seed_l, seed_r, scale=0.25, autoplay=bool(args.autoplay), autoplay_amp=args.autoplay_amp,
                              autoplay_hz=args.autoplay_hz, autoplay_whole=bool(args.autoplay_whole))
     feeds = {"L": feedL, "R": feedR}
-    encL, encR = make_encoders(grid=EYE_GRID, rate_max_hz=args.rate_max, gain=args.enc_gain, l3_gain=0.0)
+    # flip=True: eye-grid row 0 (nearest) -> screen bottom -> ventral retina (EyeEncoder's default
+    # puts grid row 0 on the dorsal, hex2-up side); see docs/ARENA_DESIGN.md "Eye".
+    encL, encR = make_encoders(grid=EYE_GRID, rate_max_hz=args.rate_max, gain=args.enc_gain, l3_gain=0.0, flip=True)
     n_drv = {"L": int(encL.idx_L1.size + encL.idx_L2.size), "R": int(encR.idx_L1.size + encR.idx_L2.size)}
     print(f"eye L drives {n_drv['L']} lamina cells, eye R {n_drv['R']} (L1+L2); start ({x0:.0f}, {y0:.0f}) th {math.degrees(th0):.0f} deg", flush=True)
 
@@ -192,14 +205,15 @@ def main() -> None:
 
     meta = dict(
         condition=cond, seed=args.seed, seed_l=seed_l, seed_r=seed_r, duration=args.duration,
+        rng="SeedSequence(seed).spawn(2): [0] brain, [1] body; feeds RandomState(seed_l / seed_r)",
         control_dt=CONTROL_DT, substeps=SUBSTEPS, n_steps=n_steps,
         room=dict(size_mm=ROOM_MM, origin="centre", x="right", y="up", heading="rad, CCW positive, 0 = +x"),
         phone=phone.to_json(), body=body.params(), start=dict(x=x0, y=y0, th=th0, min_dist_mm=args.start_min_dist),
         scale=FLY_SCALE, eye=eye.params(),
-        encoder=dict(grid=list(EYE_GRID), rate_max_hz=args.rate_max, gain=args.enc_gain, l3_gain=0.0, driven_cells=n_drv,
-                     axes="rows = distance (row 0 nearest), cols = azimuth (col 0 frontal)"),
+        encoder=dict(grid=list(EYE_GRID), rate_max_hz=args.rate_max, gain=args.enc_gain, l3_gain=0.0, driven_cells=n_drv, flip=True,
+                     axes="rows = distance (row 0 nearest -> ventral retina, flip=True), cols = azimuth (col 0 frontal)"),
         decoder=dict(mode="burst", burst_hz=args.burst_hz, tau_side_s=args.tau_side, refractory_s=args.refractory,
-                     global_refractory_s=args.global_refractory, warmup_s=dcfg.warmup_s, n_dn=n_dn,
+                     global_refractory_s=args.global_refractory, warmup_s=dcfg.warmup_s, n_dn=n_dn, n_dn_all=n_dn_all,
                      n_ol={"L": int(pops["med_L"].size), "R": int(pops["med_R"].size)}),
         lif=cfg.to_json(), shuffle_seed=(args.shuffle_seed if cond == "shuffled" else None),
         plasticity=plast_meta,
@@ -209,8 +223,11 @@ def main() -> None:
         n_neurons=conn.n, n_edges=int(conn.W.nnz), sets={k: int(v.size) for k, v in pops.items()},
         feeds=dict(autoplay=bool(args.autoplay), autoplay_amp=args.autoplay_amp, autoplay_hz=args.autoplay_hz,
                    autoplay_whole=bool(args.autoplay_whole), panel_grid=list(PANEL_GRID)),
-        notes=("random: decoder bursts logged as swipe_blocked, never applied; g_v = g_omega = 0. "
-               "dist_mm = body centre to phone centre. swipe = panel actually swiped (panel under the tip)."),
+        notes=("random: decoder bursts logged as swipe_blocked, never applied; Body(connected=False), g_v = g_omega = 0. "
+               "dist_mm = body centre to phone centre. swipe = panel actually swiped (panel under the tip at the "
+               "pre-step pose); pose, on_phone, dist_mm and reach are logged post-step. spikes = all spikes of the "
+               "8 substeps including the forced lamina (and, in a reward window, PAM) spikes; n_dn = sided DNs "
+               "(dn_L + dn_R) used for Hz/cell of burst_hz and the body traces."),
     )
 
     # ---------------- loop
@@ -227,6 +244,7 @@ def main() -> None:
 
     on_steps = 0
     w_ratio = 1.0
+    last_dopa_steps = -1      # plasticity_stats is recomputed only when the weights changed
     t_wall0 = time.time()
     t_eye = t_brain = 0.0
     next_print = 0.0
@@ -267,11 +285,11 @@ def main() -> None:
         # 4. decoder + contact gating
         want = dec.step(t, np.zeros(1, np.int32), cnt)
         burst_hz = dec.dn_fast / (n_dn * CONTROL_DT)
-        reach = body.reach()
+        reach_now = body.reach()      # contact gate at the current (pre-step) pose
         swipe: Optional[str] = None
         blocked: Optional[str] = None
         if want is not None:
-            panel = reach[want]
+            panel = reach_now[want]
             if cond != "random" and panel is not None:
                 feeds[panel].swipe()
                 swipe = panel
@@ -287,6 +305,7 @@ def main() -> None:
             trace[key] = a_tr * trace[key] + (1.0 - a_tr) * hz
         body.step(CONTROL_DT, trace["dn"], trace["dna_L"], trace["dna_R"])
         on_phone = body.on_phone
+        reach = body.reach()          # logged consistently with the post-step pose
         on_steps += int(on_phone)
 
         # 6. feeds + reward detection
@@ -299,7 +318,11 @@ def main() -> None:
             n_rewards += 1
             reward_until = t + CONTROL_DT + args.reward_s
         if plasticity_on:
-            w_ratio = float(brain.plasticity_stats()["mean_w_over_w0"])
+            pst = brain.plasticity
+            nd = pst.n_dopamine_steps if pst is not None else 0
+            if nd != last_dopa_steps:     # weights only change in dopamine steps
+                w_ratio = float(brain.plasticity_stats()["mean_w_over_w0"])
+                last_dopa_steps = nd
 
         # 7. log
         log.write(json.dumps(dict(

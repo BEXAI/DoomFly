@@ -54,7 +54,7 @@ Pose = Union[Sequence[float], "Body"]
 
 
 def wrap_angle(a: float) -> float:
-    """Wrap to (-pi, pi]."""
+    """Wrap to [-pi, pi)."""
     return float((a + math.pi) % (2.0 * math.pi) - math.pi)
 
 
@@ -101,7 +101,9 @@ class Body:
     """Walking fly: correlated random walk baseline + brain modulation.
 
     Baseline (same in every condition): speed ``v0`` = 12 mm/s, heading noise from an
-    Ornstein-Uhlenbeck process (stationary sigma 1.2 rad/s, tau 0.5 s).
+    Ornstein-Uhlenbeck process (stationary sigma 1.2 rad/s, tau 0.5 s), integrated with the
+    exact discretisation ``w <- a w + sigma sqrt(1 - a^2) N(0, 1)``, ``a = exp(-dt / tau)``,
+    so the stationary std is exactly ``sigma_omega`` for any dt.
 
     Brain modulation, per ``step(dt, r_dn, r_dna_L, r_dna_R)`` where every rate is an 80 ms
     trace in Hz per cell:
@@ -117,11 +119,15 @@ class Body:
     "Standing on the screen": when ``r_dn < stop_hz`` (0.05 Hz) and the body centre is on the
     phone, v0_eff = ``v_stand`` (3 mm/s) instead of v0.
 
+    ``connected`` (default True): whether the brain drives the body at all. With
+    ``connected=False`` (condition "random") the three rates are ignored entirely: no speed
+    modulation, no steering and no standing rule, so the body is the pure baseline walker.
+
     Walls: the body centre is kept ``wall_margin`` (half the body length, 15 mm) inside the
     wall's inner face; on contact the heading is reflected off that wall and given a random
     kick of +-30 deg, and the OU noise is reset to zero.
 
-    Condition "random": ``g_v = g_omega = 0`` (pure baseline walker).
+    Condition "random": ``connected=False`` (and ``g_v = g_omega = 0``): pure baseline walker.
     """
 
     def __init__(self, phone: Phone, rng: np.random.Generator,
@@ -130,9 +136,10 @@ class Body:
                  sigma_omega: float = 1.2, tau_omega: float = 0.5,
                  v_max: float = 60.0, v_stand: float = 3.0, stop_hz: float = 0.05,
                  eps_hz: float = 0.1, wall_kick_deg: float = 30.0,
-                 wall_margin: float = BODY_LEN_MM / 2.0) -> None:
+                 wall_margin: float = BODY_LEN_MM / 2.0, connected: bool = True) -> None:
         self.phone = phone
         self.rng = rng
+        self.connected = bool(connected)
         self.x, self.y, self.th = float(x), float(y), wrap_angle(float(th))
         self.v = 0.0
         self.omega_noise = 0.0
@@ -183,17 +190,22 @@ class Body:
     def step(self, dt: float, r_dn: float, r_dna_L: float, r_dna_R: float) -> Dict[str, float]:
         """Advance the pose by ``dt`` seconds given the three 80 ms rate traces (Hz per cell)."""
         dt = float(dt)
-        # OU heading noise (stationary std sigma_omega)
-        tau = self.tau_omega
-        self.omega_noise += (-self.omega_noise / tau) * dt + self.sigma_omega * math.sqrt(2.0 * dt / tau) * float(self.rng.standard_normal())
-        # brain steering (right-turn positive)
-        rl, rr = max(0.0, float(r_dna_L)), max(0.0, float(r_dna_R))
-        self.steer = self.g_omega * (rr - rl) / (rr + rl + self.eps_hz) if self.g_omega else 0.0
+        # OU heading noise, exact discretisation (stationary std = sigma_omega for any dt)
+        a = math.exp(-dt / self.tau_omega)
+        self.omega_noise = a * self.omega_noise + self.sigma_omega * math.sqrt(1.0 - a * a) * float(self.rng.standard_normal())
+        if not self.connected:          # pure baseline walker: the brain rates are ignored
+            self.steer = 0.0
+            self.standing = False
+            self.v = float(min(self.v0, self.v_max))
+        else:
+            # brain steering (right-turn positive)
+            rl, rr = max(0.0, float(r_dna_L)), max(0.0, float(r_dna_R))
+            self.steer = self.g_omega * (rr - rl) / (rr + rl + self.eps_hz) if self.g_omega else 0.0
+            # speed, with the standing rule
+            self.standing = bool(r_dn < self.stop_hz and self.on_phone)
+            v0_eff = self.v_stand if self.standing else self.v0
+            self.v = float(np.clip(v0_eff + self.g_v * max(0.0, float(r_dn)), 0.0, self.v_max))
         self.omega = self.omega_noise - self.steer
-        # speed
-        self.standing = bool(r_dn < self.stop_hz and self.on_phone)
-        v0_eff = self.v_stand if self.standing else self.v0
-        self.v = float(np.clip(v0_eff + self.g_v * max(0.0, float(r_dn)), 0.0, self.v_max))
         # integrate (heading first, then translate along the new heading)
         self.th = wrap_angle(self.th + self.omega * dt)
         self.x += self.v * math.cos(self.th) * dt
@@ -239,9 +251,10 @@ class Body:
             self.omega_noise = 0.0
             self.wall_hits += 1
 
-    def params(self) -> Dict[str, float]:
-        return dict(v0=self.v0, g_v=self.g_v, g_omega=self.g_omega, sigma_omega=self.sigma_omega,
-                    tau_omega=self.tau_omega, v_max=self.v_max, v_stand=self.v_stand, stop_hz=self.stop_hz,
+    def params(self) -> Dict[str, object]:
+        return dict(connected=self.connected, v0=self.v0, g_v=self.g_v, g_omega=self.g_omega, sigma_omega=self.sigma_omega,
+                    tau_omega=self.tau_omega, ou_discretisation="exact (a = exp(-dt/tau), sigma sqrt(1-a^2))",
+                    v_max=self.v_max, v_stand=self.v_stand, stop_hz=self.stop_hz,
                     eps_hz=self.eps_hz, wall_kick_deg=math.degrees(self.wall_kick), wall_margin=self.wall_margin,
                     body_len_mm=BODY_LEN_MM, reach_mm=REACH_MM, leg_angle_deg=math.degrees(LEG_ANGLE_RAD),
                     scale=FLY_SCALE)

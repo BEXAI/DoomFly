@@ -28,17 +28,32 @@ Mushroom-body plasticity (docs/ARENA_DESIGN.md, "Dopamine / mushroom-body plasti
 dopaminergic neuron spikes, every KC->MBON weight is multiplied by
 (1 - eta * g_m * e_kc * dt) where g_m is the DAN input the MBON receives *in the wiring*.
 Weights are bounded below at 0.2 * w0 and never recover (v1).  Off by default: with
-plasticity disabled the model is bit-for-bit the one described above.
+plasticity disabled the model is bit-for-bit the one described above.  Note that the rule
+fires on ANY dopaminergic spike (spontaneous or visually evoked as well as reward-driven), so
+w drifts down slowly even without reward events; see docs/ARENA_DESIGN.md.
+
+Implementation notes (all bit-identical to the straightforward numpy formulation):
+  * the dense state passes in `step` write into preallocated float32 buffers (`out=`), and
+    the set of refractory neurons is kept as the fired sets of the last `ref_steps` steps
+    (exactly the neurons with refrac > 0, also when a forced cell re-fires while refractory)
+    instead of a full-array compare + mask per step;
+  * the column gather `W[:, fired] @ x` is done with the same scipy kernels
+    (csr_row_index, csc_matvec, float32, same accumulation order) without building a
+    csc_matrix object per step;
+  * the forced-spike probabilities `clip(rate * dt)` are cached while the caller passes the
+    same rate array object (callers must not mutate that array in place between steps).
 """
 from __future__ import annotations
 
 import json
 import os
 from dataclasses import dataclass, asdict
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 import scipy.sparse as sp
+from collections import deque
+from scipy.sparse import _sparsetools as _spt
 
 GRAPH_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "graph")
 
@@ -147,7 +162,8 @@ class PlasticityState:
 class Brain:
     """Single-instance LIF network over a Connectome, Euler-integrated at dt."""
 
-    def __init__(self, conn: Connectome, cfg: Optional[LIFConfig] = None, seed: int = 0):
+    def __init__(self, conn: Connectome, cfg: Optional[LIFConfig] = None,
+                 seed: Union[int, np.random.SeedSequence] = 0):
         self.conn = conn
         self.cfg = cfg or LIFConfig()
         c = self.cfg
@@ -175,6 +191,12 @@ class Brain:
         self._plast: Optional[PlasticityState] = None
         self._dopa_idx: Optional[np.ndarray] = None
         self._dopa_rate: Optional[np.ndarray] = None
+        # preallocated dense work buffers (never exposed) and the forced-probability cache
+        self._inflow = np.empty(self.n, np.float32)
+        self._tmp = np.empty(self.n, np.float32)
+        self._mask = np.empty(self.n, bool)
+        self._p_src: Optional[np.ndarray] = None
+        self._p: Optional[np.ndarray] = None
         self.reset()
 
     # ------------------------------------------------------------------ state
@@ -189,7 +211,11 @@ class Brain:
         self.pos = 0
         self.t_steps = 0
         self.last_fired = np.zeros(0, np.int64)
+        # neurons with refrac > 0 at the start of a step == union of the fired sets of the
+        # last ref_steps steps (refrac is set to ref_steps at spike time, -1 per step).
+        self._ref_hist: deque = deque([np.zeros(0, np.int64)] * self.ref_steps, maxlen=self.ref_steps)
         self._dopa_idx = self._dopa_rate = None
+        self._p_src = self._p = None
         if self._plast is not None:       # traces are dynamic state; learned weights persist
             self._plast.trace[:] = 0.0
             self._plast.trace_active = False
@@ -197,13 +223,32 @@ class Brain:
 
     # ------------------------------------------------------------------ core
     def _drive_from(self, fired: np.ndarray) -> Optional[np.ndarray]:
-        """Sum of the W columns of the neurons that fired (sparse column gather)."""
-        if fired.size == 0:
+        """Sum of the W columns of the neurons that fired (sparse column gather).
+
+        Does exactly what ``self.W[:, fired] @ x`` (x = std_x[fired], or ones without STD)
+        does inside scipy -- csr_row_index gather of the CSC columns, then csc_matvec in
+        float32 in the same order -- without building a csc_matrix object and its validation
+        (~0.1 ms of Python per call)."""
+        m = fired.size
+        if m == 0:
             return None
-        cols = self.W[:, fired]
+        W = self.W
+        indptr, indices, data = W.indptr, W.indices, W.data
+        idx_dtype = indptr.dtype
+        cols = fired.astype(idx_dtype, copy=False)
+        sub_indptr = np.zeros(m + 1, dtype=idx_dtype)
+        np.cumsum(indptr[cols + 1] - indptr[cols], out=sub_indptr[1:])
+        nnz = int(sub_indptr[-1])
+        sub_indices = np.empty(nnz, dtype=idx_dtype)
+        sub_data = np.empty(nnz, dtype=data.dtype)
+        _spt.csr_row_index(m, cols, indptr, indices, data, sub_indices, sub_data)
+        out = np.zeros(self.n, np.float32)
         if self.cfg.std_u:
-            return np.asarray(cols @ self.std_x[fired]).ravel().astype(np.float32, copy=False)
-        return np.asarray(cols.sum(axis=1)).ravel().astype(np.float32, copy=False)
+            x = self.std_x[fired]
+        else:
+            x = np.ones(m, np.float32)
+        _spt.csc_matvec(self.n, m, sub_indptr, sub_indices, sub_data, x, out)
+        return out
 
     def step(self, drive_idx: Optional[np.ndarray] = None, drive_rate_hz: Optional[np.ndarray] = None,
              extra_mv: Optional[np.ndarray] = None) -> np.ndarray:
@@ -222,34 +267,49 @@ class Brain:
             self.j_syn += drive
         self.j_syn *= self.decay_s
 
-        inflow = self.j_syn - self.adapt_kick * self.adapt if c.adapt_mv else self.j_syn.copy()
+        inflow = self._inflow
+        if c.adapt_mv:
+            tmp = self._tmp
+            np.multiply(self.adapt, self.adapt_kick, out=tmp)     # == adapt_kick * adapt (float32)
+            np.subtract(self.j_syn, tmp, out=inflow)
+        else:
+            inflow[:] = self.j_syn
         if extra_mv is not None:
             inflow += extra_mv
-        refractory = self.refrac > 0
-        inflow[refractory] = 0.0
-        self.u = self.decay_v * self.u + inflow
+        ref_hist = self._ref_hist
+        ref_idx = ref_hist[0] if self.ref_steps == 1 else np.concatenate(ref_hist)
+        if ref_idx.size:
+            inflow[ref_idx] = 0.0
+        u = self.u
+        np.multiply(u, self.decay_v, out=u)                          # == decay_v * u
+        np.add(u, inflow, out=u)
 
-        fired_mask = self.u >= self.u_thresh
+        fired_mask = self._mask
+        np.greater_equal(u, self.u_thresh, out=fired_mask)
         if drive_idx is not None and drive_rate_hz is not None and drive_idx.size:
-            p = np.clip(drive_rate_hz * self.dt_s, 0.0, 1.0)
+            p = self._p
+            if p is None or drive_rate_hz is not self._p_src:         # same array object -> same p
+                p = np.clip(drive_rate_hz * self.dt_s, 0.0, 1.0)
+                self._p, self._p_src = p, drive_rate_hz
             kicks = self.rng.random(drive_idx.size) < p
             forced = drive_idx[kicks]
             fired_mask[forced] = True
             fired_mask[drive_idx[~kicks]] = False   # driven cells only spike when told to
         fired = np.flatnonzero(fired_mask).astype(np.int64)
 
-        self.u[fired] = self.u_reset
+        u[fired] = self.u_reset
         if c.adapt_mv:
             self.adapt *= self.decay_a
             self.adapt[fired] += 1.0
-        self.refrac[self.refrac > 0] -= 1
+        if ref_idx.size:
+            self.refrac[ref_idx] -= 1
         self.refrac[fired] = self.ref_steps
+        ref_hist.append(fired)
         if c.std_u:
-            # resource recovers toward 1, and each spike consumes a fraction U of what is left.
-            # Note the order: the resource is depleted at spike time and the depleted value is
-            # what weights delivery one delay step later, so a spike from a rested cell transmits
-            # (1 - U) of its full weight (0.85 at U = 0.15). Documented in README §3.
-            self.std_x += (1.0 - self.std_x) * (c.dt_ms / c.std_tau_rec_ms)
+            tmp = self._tmp
+            np.subtract(1.0, self.std_x, out=tmp)
+            np.multiply(tmp, (c.dt_ms / c.std_tau_rec_ms), out=tmp)
+            np.add(self.std_x, tmp, out=self.std_x)
             self.std_x[fired] *= (1.0 - c.std_u)
 
         if self._plast is not None:
@@ -456,23 +516,24 @@ class SpikeRecorder:
         self.pop_counts: Dict[str, List[int]] = {k: [] for k in pops}
         self.total: List[int] = []
         self._acc = np.zeros(n, bool)
-        self._pop_acc = {k: 0 for k in pops}
-        self._tot = 0
+        self._fr: List[np.ndarray] = []      # fired arrays of the substeps of the open frame
 
     def add_step(self, fired: np.ndarray) -> None:
-        self._acc[fired] = True
-        self._tot += fired.size
-        for k, m in self.masks.items():
-            self._pop_acc[k] += int(m[fired].sum())
+        """Record the spikes of one LIF substep (kept as index arrays until end_frame)."""
+        self._fr.append(fired)
 
     def end_frame(self) -> None:
+        """Close the control frame: population spike counts (every spike counts, a cell may
+        fire several times per frame) and the packed 'fired at least once' bits."""
+        fr = self._fr
+        cat = fr[0] if len(fr) == 1 else (np.concatenate(fr) if fr else np.zeros(0, np.int64))
+        self._fr = []
+        self._acc[cat] = True
         self.frames.append(np.packbits(self._acc))
-        self.total.append(self._tot)
-        for k in self.pops:
-            self.pop_counts[k].append(self._pop_acc[k])
-            self._pop_acc[k] = 0
+        self.total.append(int(cat.size))
+        for k, m in self.masks.items():
+            self.pop_counts[k].append(int(m[cat].sum()))
         self._acc[:] = False
-        self._tot = 0
 
     def save(self, path: str, extra: Optional[Dict] = None) -> None:
         arrs = {"frames_packed": np.stack(self.frames) if self.frames else np.zeros((0, (self.n + 7) // 8), np.uint8),

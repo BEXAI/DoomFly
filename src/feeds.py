@@ -273,6 +273,9 @@ class Feed:
         self._appbar = self._make_appbar()
         self._frame: Optional[np.ndarray] = None
         self._dirty = True
+        # luminance_grid cache: (rows, cols, offset, visible autoplay cut indices) -> grid.
+        # The rendered frame is a pure function of those inputs, so a hit is bit-identical.
+        self._lum_cache: Optional[Tuple[tuple, np.ndarray]] = None
 
         self._update_counters()
 
@@ -384,16 +387,15 @@ class Feed:
         while i < len(self._tops) and self._tops[i] < bottom_edge:
             spec = self._spec(i)
             top = self._tops[i]
-            h_i = (self.seed * 1_000_003 + i * 7919) & 0x7FFFFFFF
+            period, h_i = self._autoplay_cut_period(i, spec)
             if spec["kind"] == "novel":
                 y0, y1 = top, top + spec["h"]
-                period, amp = (1.0 / self.novel_hz if self.novel_hz > 0 else 0.0), self.novel_amp
+                amp = self.novel_amp
             elif spec.get("image") is not None:
                 if self.autoplay_whole:
                     y0, y1 = top, top + spec["h"]
                 else:
                     y0, y1 = top + spec["image"]["y0"], top + spec["image"]["y1"]
-                period = (1.0 / self.autoplay_hz if self.autoplay_hz > 0 else 0.0) * (0.7 + 0.6 * ((h_i >> 8) % 1000) / 1000.0)
                 amp = self.autoplay_amp
             else:
                 i += 1
@@ -414,11 +416,48 @@ class Feed:
             i += 1
         return frame
 
+    def _autoplay_cut_period(self, i: int, spec: dict) -> Tuple[float, int]:
+        """(cut period in s, per-card hash) of card ``i``; period 0 = this card never cuts."""
+        h_i = (self.seed * 1_000_003 + i * 7919) & 0x7FFFFFFF
+        if spec["kind"] == "novel":
+            period = 1.0 / self.novel_hz if self.novel_hz > 0 else 0.0
+        elif spec.get("image") is not None:
+            period = (1.0 / self.autoplay_hz if self.autoplay_hz > 0 else 0.0) * (0.7 + 0.6 * ((h_i >> 8) % 1000) / 1000.0)
+        else:
+            period = 0.0
+        return period, h_i
+
+    def _frame_signature(self) -> tuple:
+        """Everything the rendered frame depends on: the scroll offset and, with autoplay,
+        the current cut index of every visible autoplaying card (see _apply_autoplay)."""
+        sig: List[object] = [self.offset]
+        if not self.autoplay:
+            return tuple(sig)
+        off = self.offset
+        bottom_edge = off + self.height
+        i = bisect_right(self._bottoms, off)
+        while i < len(self._tops) and self._tops[i] < bottom_edge:
+            period, h_i = self._autoplay_cut_period(i, self._spec(i))
+            if period > 0.0:
+                phase = period * (((h_i >> 4) % 1000) / 1000.0)
+                sig.append((i, int((self.time_s + phase) // period)))
+            i += 1
+        return tuple(sig)
+
     def luminance_grid(self, rows: int, cols: int) -> np.ndarray:
-        """Mean luminance (0..1) of the current frame on a ``rows x cols`` grid."""
+        """Mean luminance (0..1) of the current frame on a ``rows x cols`` grid.
+
+        Cached on the frame signature: with autoplay the frame only changes at a scroll or a
+        cut, so between those the last grid is returned (a copy) without re-rendering."""
+        key = (int(rows), int(cols)) + self._frame_signature()
+        c = self._lum_cache
+        if c is not None and c[0] == key:
+            return c[1].copy()
         gray = cv2.cvtColor(self.render(), cv2.COLOR_BGR2GRAY)
         small = cv2.resize(gray, (int(cols), int(rows)), interpolation=cv2.INTER_AREA)
-        return small.astype(np.float32) / 255.0
+        grid = small.astype(np.float32) / 255.0
+        self._lum_cache = (key, grid)
+        return grid.copy()
 
     # ------------------------------------------------------------------ #
     # Layout bookkeeping

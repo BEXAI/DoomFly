@@ -23,19 +23,32 @@ All modules below must run with the existing `src/sim.py`, `src/encoder.py`, `sr
 Correlated random walk **baseline** identical in every condition, modulated by the brain:
 - speed v = v0 + g_v · r_DN, with v0 = 12 mm/s, g_v = 6 mm/s per Hz of descending-neuron
   population rate (Hz per cell, 80 ms trace), clipped to [0, 60] mm/s.
-- turning ω = ω_noise + g_ω · (r_DNa_R − r_DNa_L)/(r_DNa_R + r_DNa_L + ε), with ω_noise an
-  Ornstein–Uhlenbeck process (σ = 1.2 rad/s, τ = 0.5 s), g_ω = 3 rad/s. Sign convention: more
-  right-side DNa activity turns the fly **right** (ipsilateral turn, DNa02 convention, see
-  docs/RESEARCH_REFS.md §7).
+- turning ω = ω_noise − g_ω · (r_DNa_R − r_DNa_L)/(r_DNa_R + r_DNa_L + ε), with ω_noise an
+  Ornstein–Uhlenbeck process (σ = 1.2 rad/s, τ = 0.5 s), g_ω = 3 rad/s. Sign convention: θ is
+  counter-clockwise positive, so the minus sign makes more right-side DNa activity turn the fly
+  **right** (ipsilateral turn, DNa02 convention, see docs/RESEARCH_REFS.md §7). The OU process
+  is integrated with the exact discretisation ω ← a·ω + σ·sqrt(1 − a²)·N(0,1), a = exp(−dt/τ),
+  so its stationary std is exactly σ (Euler–Maruyama would give σ/sqrt(1 − dt/2τ) ≈ 1.21 rad/s).
 - DNa sets: all descending neurons whose type starts with "DNa" on each side; fall back to all
   DNs per side if a set is empty. Expose both as pops so the log records them.
 - Walls: on contact, reflect heading away from the wall plus a random ±30° kick.
 - Stops: when r_DN < 0.05 Hz and the fly is on the phone, v0 is reduced to 3 mm/s ("standing on
-  the screen"); document.
+  the screen"); document. Note that the DN population is bursty: its 80 ms trace is below
+  0.05 Hz/cell in ~80–90 % of control steps in every condition, so in practice a connected fly
+  slows down for most of its time on the phone.
+- r_DN, r_DNa_L/R are Hz per cell of the cells actually counted (dn_L ∪ dn_R = 1,304; `dn_all`
+  also contains 10 unsided DNs that no population count includes). The same n_dn is used by the
+  burst decoder.
 - `Body.step(dt, r_dn, r_dna_L, r_dna_R)` updates pose; `Body.front_leg_tips()` returns the two
   tip positions; `Body.panel_under(point)` → "L" | "R" | None.
-- Condition "random": g_v = g_ω = 0 (pure baseline walker, brain still simulated and logged but
-  not connected to the body or to swipes).
+- Condition "random": `Body(connected=False)` (and g_v = g_ω = 0): the body ignores all three
+  rates — no speed modulation, no steering **and no standing rule** — so it is the pure baseline
+  walker; the brain is still simulated and logged but not connected to the body or to swipes.
+  (Before this flag the standing rule alone made random flies slow to 3 mm/s on the phone
+  whenever the DN trace was quiet, i.e. most of the time, inflating the control's dwell time.)
+- Random streams: `SeedSequence(seed).spawn(2)` → child 0 seeds the brain (forced Poisson
+  spikes), child 1 the body (start pose, OU noise, wall kicks); the feeds keep
+  `RandomState(2·seed+1)` / `RandomState(2·seed+2)`.
 
 ## Eye (`src/arena.py`, class `PanoramicEye`)
 - Luminance map of the room: 2 mm cells (200 × 200). Floor 0.03, walls 0.06 (a 4 mm band),
@@ -48,7 +61,10 @@ Correlated random walk **baseline** identical in every condition, modulated by t
   (col 17 = 170–180°) on that eye's side (left eye = left hemifield, right eye mirrored so col 0
   is frontal for both). Distance rows: 24 log-spaced bins from 5 mm to 300 mm (row 0 = nearest,
   i.e. lowest in the visual field). Value = mean luminance of map cells along that ray segment
-  (sample ~6 points per bin, nearest-cell lookup; outside the room = 0).
+  (sample ~6 points per bin, nearest-cell lookup; outside the room = 0). `EyeEncoder`'s default
+  maps grid row 0 to the *top* of the screen (dorsal, hex2-up), so the arena encoders are built
+  with `flip=True` to put the nearest row on the **ventral** retina, as the physical reading
+  requires.
 - `PanoramicEye.grids(pose)` → (grid_L, grid_R) float32 (24, 18) in [0, 1].
 
 ## Swipes and contact
@@ -69,6 +85,12 @@ Correlated random walk **baseline** identical in every condition, modulated by t
 - Rule (dopamine-gated depression, flybrain conditioning4 / Hige et al.): every step,
   for each KC→MBON edge (kc, m): w ← w · (1 − eta · g_m · e_kc · dt), bounded below at 0.2·w0
   (sign preserved). No recovery in v1 (document). eta default 0.05 per (unit gain·trace·s).
+  The rule fires on **any** PAM spike, not only on the reward drive: spontaneous and visually
+  evoked PAM activity (PAM→KC and KC/MBON→PAM wiring) depresses too, so in the `dopamine`
+  condition w/w0 drifts below 1 from the first seconds even in runs with no reward event
+  (observed: ≈0.998 after 120 s without rewards). Treat the reward-free drift as the control
+  against which reward-driven depression is judged; a reward-gated variant would need an
+  explicit gate in `_plasticity_step`.
 - `Brain.dopamine_drive(dan_idx, rate_hz)`: adds the DAN set to the forced-Poisson drive for
   the current step (same mechanism as sensory drive).
 - Diagnostics: `Brain.plasticity_stats()` → dict(mean_w_over_w0, frac_edges_changed, n_edges).
@@ -99,6 +121,11 @@ Then one line per 16 ms control step:
  "reward": bool, "w_ratio": float (mean w/w0 of KC->MBON, 1.0 if plasticity off),
  "novel": {"L": bool, "R": bool}, "posts": {"L": int, "R": int}}
 ```
+`pose`, `on_phone`, `dist_mm` and `reach` are the values **after** the step's `Body.step`
+(the swipe gate itself uses the pre-step reach, i.e. the pose at time t). `spikes` is the total
+number of spikes in the 8 substeps **including the forced ones** (lamina L1/L2 Poisson drive,
+≈ two thirds of the total, and the PAM drive inside a reward window); `pops.eye_L/eye_R` are
+exactly those forced lamina spikes if brain-generated activity is wanted.
 Also `out/arena_<cond>_s<seed>_spikes.npz` (SpikeRecorder frames) **only** for the run that
 will be rendered (flag `--spikes`).
 
