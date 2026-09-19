@@ -60,6 +60,8 @@ def main():
     ap.add_argument("--autoplay-amp", type=float, default=0.8)
     ap.add_argument("--autoplay-hz", type=float, default=1.0)
     ap.add_argument("--autoplay-whole", type=int, default=1)
+    ap.add_argument("--feed-mode", choices=["cards", "reels"], default="cards", help="cards = synthetic card feed (all published results); reels = full-screen video posts from --clips-dir")
+    ap.add_argument("--clips-dir", default=os.path.join(ROOT, "assets", "clips"))
     ap.add_argument("--teacher-gap", type=float, nargs=2, default=(0.9, 1.6), help="teacher: seconds between swipes on a panel (uniform range)")
     ap.add_argument("--scripted", default=None, help="evaluation: scripted swipes 'L:15,R:15' (panel:seconds blocks); the decoder only logs would_swipe")
     ap.add_argument("--teacher-panels", default="LR", help="teacher: which panels the teacher swipes (e.g. L for a left-only probe)")
@@ -106,7 +108,7 @@ def main():
     print(f"readout cells: {readout_cells.size} (DN+MN); front-leg pools L={pool_masks['L'].sum()} R={pool_masks['R'].sum()}")
 
     # feeds + eyes
-    feedL, feedR = make_pair(args.seed_l, args.seed_r, scale=0.25, autoplay=bool(args.autoplay), autoplay_amp=args.autoplay_amp, autoplay_hz=args.autoplay_hz, autoplay_whole=bool(args.autoplay_whole))
+    feedL, feedR = make_pair(args.seed_l, args.seed_r, scale=0.25, mode=args.feed_mode, clips_dir=args.clips_dir, autoplay=bool(args.autoplay), autoplay_amp=args.autoplay_amp, autoplay_hz=args.autoplay_hz, autoplay_whole=bool(args.autoplay_whole))
     encL, encR = make_encoders(grid=tuple(args.grid), rate_max_hz=args.rate_max, gain=args.enc_gain, tonic_hz=args.tonic_hz, l3_gain=args.l3_gain)
     n_drv_L, n_drv_R = encL.encode(feedL.luminance_grid(*args.grid), 0.0)["idx"].size, encR.encode(feedR.luminance_grid(*args.grid), 0.0)["idx"].size
     print(f"eye L drives {n_drv_L} lamina cells, eye R {n_drv_R} (L1+L2{'+L3' if args.l3_gain > 0 else ''})")
@@ -129,6 +131,7 @@ def main():
                           control_dt=control_dt, substeps=substeps, lif=cfg.to_json(), n_neurons=conn.n,
                           n_edges=int(conn.W.nnz), shuffle=args.shuffle, threshold_z=dcfg.threshold_z,
                           readout_cells=int(readout_cells.size), grid=list(args.grid), rate_max=args.rate_max, tonic_hz=args.tonic_hz, burst_hz=args.burst_hz, autoplay=bool(args.autoplay), autoplay_amp=args.autoplay_amp, autoplay_hz=args.autoplay_hz, autoplay_whole=bool(args.autoplay_whole), enc_gain=args.enc_gain,
+                          feed_mode=args.feed_mode, clips_dir=os.path.relpath(args.clips_dir, ROOT), clips=[c["name"] for c in feedL.clip_info] if args.feed_mode == "reels" else None,
                           l3_gain=args.l3_gain, seed=args.seed, refractory_s=args.refractory, global_refractory_s=dcfg.global_refractory_s, warmup_s=dcfg.warmup_s,
                           tau_side_s=args.tau_side, scripted=args.scripted, teacher_gap=list(args.teacher_gap), teacher_panels=args.teacher_panels,
                           driven_cells={"L": int(n_drv_L), "R": int(n_drv_R)}, n_dn=int(dcfg.n_dn),
