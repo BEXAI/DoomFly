@@ -439,6 +439,37 @@ Figures: `docs/figures/arena_trajectories.png`, `arena_time_on_phone.png`, `aren
 --spikes out/arena_dopamine_s3_spikes.npz` (the most eventful dopamine run: one 60 s visit,
 25 swipes, 6 rewards, 50 % of the time on the phone, w/w₀ 0.971).
 
+### 9.2 Train first, then set it free (`--pin-on-phone`, `--forced-swipe-s`, `--save-weights`, condition `trained`)
+
+The question behind this protocol: if the fly is *made* to scroll for ten minutes with dopamine
+on, does it then choose the phone more often than an untrained fly? Two phases, same brain.
+
+**Training (10 min of brain time).** The body is pinned on the hinge at the centre of the phone,
+facing up, so the front-left leg is over the left panel and the front-right leg over the right
+one. Every 2 s a swipe is forced on alternating panels (logged with `forced: true`); the brain's
+own descending bursts still swipe as well. Plasticity is on (`dopamine` condition) and every
+novel post that appears while the fly is on the phone, which is always, drives the 316 PAM
+neurons for 300 ms. At the end the 33,496 KC→MBON weights are written to a file
+(`Brain.export_plastic_weights`). Nothing else is carried over: membrane potentials, synaptic
+depression and traces start fresh in the test, so the *only* trace of the training is the
+learned weights. Training seed 100, separate from the test seeds.
+
+**Test (120 s, five seeds).** Condition `trained` = the `real` condition (real wiring, brain
+steers, contact-gated swipes, no dopamine) with the trained weights loaded before the run
+(`Brain.import_weights`) and plasticity frozen. Start pose, heading noise and feeds are the same
+seeds 0–4 as the published sweep, so `trained` vs `real` is a paired comparison in which the
+only difference is the learned weights. An "exposure without dopamine" control needs no run: with
+plasticity off the ten minutes leave no trace in the model, so that control *is* the `real` row.
+
+```bash
+python3 src/run_arena.py --condition dopamine --seed 100 --duration 600 --pin-on-phone --forced-swipe-s 2 \
+        --save-weights out/train/trained_w.npz --tag arena_train_pinned_s100 --out-dir out/train
+for sd in 0 1 2 3 4; do python3 src/run_arena.py --condition trained --seed $sd --duration 120 --load-weights out/train/trained_w.npz; done
+python3 src/analyze_arena.py            # adds the `trained` row and the trained − real paired comparison
+```
+
+RESULTS_92_PLACEHOLDER
+
 ## 10. Attribution (CC-BY)
 
 > Connectome: MaleCNS v1.0 — HHMI Janelia FlyEM Project Team, the Cambridge Drosophila

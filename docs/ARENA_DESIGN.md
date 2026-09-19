@@ -145,3 +145,17 @@ rotated to heading, trail, reward flashes), below it the brain PiP and a HUD: co
 phone, visits, swipes, dopamine events, KC→MBON weight ratio, distance. Storyboard: title,
 split-screen comparison card (real vs dopamine vs shuffled vs random time-on-phone bars) near the
 end, attribution. Replays feeds deterministically from seeds + swipe times as `render.py` does.
+
+## Training protocol (README 9.2)
+- `--pin-on-phone`: start pose (0, 0, +90°); after every `Body.step` the pose is reset to it and
+  v = 0, so the body never moves (the OU/wall random draws still advance). Left tip over L,
+  right tip over R (reach 22 mm at ±35°).
+- `--forced-swipe-s P`: at t = P, 2P, ... a swipe is applied to the panel under the alternating
+  L/R tip and logged with `forced: true` (`swipes_forced` in the summary); a brain-triggered
+  swipe is skipped in a step that already swiped by force.
+- `--save-weights` (needs `dopamine`): `Brain.export_plastic_weights()` -> npz with rows (MBON),
+  cols (KC), w, w0, source/condition/seed/duration/rewards.
+- `--load-weights` (any condition; required by `trained`): `Brain.import_weights(rows, cols, w)`
+  overwrites exactly those edges before the run; `meta.loaded_weights` records path, n_edges,
+  mean/min w/w0. Condition `trained` = `real` + loaded weights, plasticity off.
+- Only the weights persist between training and test; all dynamic state starts fresh.
