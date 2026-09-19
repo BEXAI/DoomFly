@@ -32,3 +32,4 @@ out/arena_*
 out/baseline/
 out/episode_*.json
 out/summary_*.json
+out/reels_*/
