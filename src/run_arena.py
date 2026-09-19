@@ -34,7 +34,7 @@ import math
 import os
 import sys
 import time
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
@@ -48,7 +48,7 @@ from arena import Phone, Body, PanoramicEye, random_start_pose, PANEL_GRID, ROOM
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ANNOT_PATH = os.path.join(ROOT, "data", "raw", "body-annotations-male-cns-v1.0-minconf-0.5.feather")
 SETS_ARENA_PATH = os.path.join(ROOT, "data", "graph", "sets_arena.json")
-CONDITIONS = ("real", "dopamine", "shuffled", "random")
+CONDITIONS = ("real", "dopamine", "shuffled", "random", "trained")   # trained: real wiring + weights from --load-weights, plasticity off
 CONTROL_DT = 0.016
 SUBSTEPS = 8
 EYE_GRID = (24, 18)
@@ -90,6 +90,12 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--spikes", action="store_true", help="also save whole-brain spike frames (for the render)")
     ap.add_argument("--out-dir", default=os.path.join(ROOT, "out"))
+    ap.add_argument("--tag", default=None, help="log / summary name (default arena_<cond>_s<seed>)")
+    # training protocol (see README 9.2): pin the body on the phone, force scrolling, save the learned weights
+    ap.add_argument("--pin-on-phone", action="store_true", help="body fixed at the phone centre, heading +y (front legs over L / R)")
+    ap.add_argument("--forced-swipe-s", type=float, default=0.0, help="> 0: swipe every this many seconds, alternating panels (training)")
+    ap.add_argument("--save-weights", default=None, help="npz to write the learned KC->MBON weights to (needs plasticity)")
+    ap.add_argument("--load-weights", default=None, help="npz from --save-weights to load before the run (required for `trained`)")
     # brain (same as run_episode)
     ap.add_argument("--weight-scale", type=float, default=0.5)
     ap.add_argument("--adapt-mv", type=float, default=0.6)
@@ -122,7 +128,9 @@ def main() -> None:
 
     cond = args.condition
     os.makedirs(args.out_dir, exist_ok=True)
-    tag = f"arena_{cond}_s{args.seed}"
+    tag = args.tag or f"arena_{cond}_s{args.seed}"
+    if cond == "trained" and not args.load_weights:
+        raise SystemExit("condition `trained` needs --load-weights <npz from a --save-weights training run>")
     log_path = os.path.join(args.out_dir, f"{tag}.jsonl")
     seed_brain, seed_body = np.random.SeedSequence(args.seed).spawn(2)
     rng = np.random.default_rng(seed_body)      # body: start pose, OU noise, wall kicks
@@ -136,6 +144,15 @@ def main() -> None:
         conn = conn.shuffled(args.shuffle_seed)
     cfg = LIFConfig(weight_scale=args.weight_scale, adapt_mv=args.adapt_mv, std_u=args.std_u, std_tau_rec_ms=args.std_tau)
     brain = Brain(conn, cfg, seed=seed_brain)
+    loaded_meta: Optional[Dict[str, object]] = None
+    if args.load_weights:
+        z = np.load(args.load_weights)
+        n_set = brain.import_weights(z["rows"], z["cols"], z["w"])
+        ratio = np.asarray(z["w"], np.float64) / np.asarray(z["w0"], np.float64)
+        loaded_meta = dict(path=args.load_weights, n_edges=n_set, mean_w_over_w0=float(ratio.mean()),
+                           min_w_over_w0=float(ratio.min()), frac_changed=float((np.abs(ratio - 1) > 1e-3).mean()),
+                           source=str(z["source"]) if "source" in z else None)
+        print(f"loaded {n_set} KC->MBON weights from {args.load_weights}: mean w/w0 {ratio.mean():.4f}, min {ratio.min():.3f}", flush=True)
 
     dna_sets = load_dna_sets()
     dna_L, dna_R = conn.idx(dna_sets["dna_left"]), conn.idx(dna_sets["dna_right"])
@@ -177,7 +194,10 @@ def main() -> None:
 
     # ---------------- world
     phone = Phone()
-    x0, y0, th0 = random_start_pose(rng, phone, min_dist=args.start_min_dist)
+    if args.pin_on_phone:
+        x0, y0, th0 = 0.0, 0.0, math.pi / 2          # on the hinge, facing +y: left leg over L, right over R
+    else:
+        x0, y0, th0 = random_start_pose(rng, phone, min_dist=args.start_min_dist)
     connected = cond != "random"
     g_v, g_omega = (args.g_v, args.g_omega) if connected else (0.0, 0.0)
     body = Body(phone, rng, x0, y0, th0, v0=args.v0, g_v=g_v, g_omega=g_omega, connected=connected)
@@ -216,7 +236,9 @@ def main() -> None:
                      global_refractory_s=args.global_refractory, warmup_s=dcfg.warmup_s, n_dn=n_dn, n_dn_all=n_dn_all,
                      n_ol={"L": int(pops["med_L"].size), "R": int(pops["med_R"].size)}),
         lif=cfg.to_json(), shuffle_seed=(args.shuffle_seed if cond == "shuffled" else None),
-        plasticity=plast_meta,
+        plasticity=plast_meta, loaded_weights=loaded_meta,
+        training=dict(pin_on_phone=bool(args.pin_on_phone), forced_swipe_s=args.forced_swipe_s,
+                      note="forced swipes alternate L/R on a fixed schedule and are logged with forced=true; brain-triggered swipes are still applied"),
         reward=dict(rule="rising edge of novel_visible on either panel while on_phone", pam_hz=args.reward_hz,
                     window_s=args.reward_s, drives_pam=(cond == "dopamine")),
         rate_trace_s=0.080, dna_source=dna_source, dna_types=dna_sets.get("dna_types"),
@@ -234,6 +256,9 @@ def main() -> None:
     log = open(log_path, "w")
     log.write(json.dumps(dict(meta=meta)) + "\n")
     n_swipes = {"L": 0, "R": 0}
+    n_forced = 0
+    next_forced = args.forced_swipe_s if args.forced_swipe_s > 0 else float("inf")
+    forced_side = "L"
     n_blocked = 0
     n_rewards = 0
     reward_until = -1.0
@@ -288,7 +313,17 @@ def main() -> None:
         reach_now = body.reach()      # contact gate at the current (pre-step) pose
         swipe: Optional[str] = None
         blocked: Optional[str] = None
-        if want is not None:
+        forced = False
+        if t >= next_forced:                  # training: scroll on a fixed schedule regardless of the brain
+            panel_f = reach_now[forced_side]
+            if panel_f is not None:
+                feeds[panel_f].swipe()
+                swipe = panel_f
+                forced = True
+                n_forced += 1
+            forced_side = "R" if forced_side == "L" else "L"
+            next_forced += args.forced_swipe_s
+        if want is not None and not forced:
             panel = reach_now[want]
             if cond != "random" and panel is not None:
                 feeds[panel].swipe()
@@ -304,6 +339,8 @@ def main() -> None:
             hz = c / (max(1, n_cells[key]) * CONTROL_DT)
             trace[key] = a_tr * trace[key] + (1.0 - a_tr) * hz
         body.step(CONTROL_DT, trace["dn"], trace["dna_L"], trace["dna_R"])
+        if args.pin_on_phone:                 # training: the body stays where it was put
+            body.x, body.y, body.th, body.v = x0, y0, th0, 0.0
         on_phone = body.on_phone
         reach = body.reach()          # logged consistently with the post-step pose
         on_steps += int(on_phone)
@@ -329,7 +366,7 @@ def main() -> None:
             step=k, t=round(t, 4),
             pose=dict(x=round(body.x, 2), y=round(body.y, 2), th=round(body.th, 4), v=round(body.v, 2)),
             on_phone=bool(on_phone), dist_mm=round(body.dist_mm, 1),
-            reach=reach, swipe=swipe, swipe_blocked=blocked,
+            reach=reach, swipe=swipe, swipe_blocked=blocked, forced=forced,
             burst_hz=round(float(burst_hz), 3), side_ev=round(float(dec.last_side_evidence), 4), spikes=int(total),
             pops={p: cnt[p] for p in LOG_POPS},
             reward=bool(reward), w_ratio=round(w_ratio, 5),
@@ -349,12 +386,24 @@ def main() -> None:
     wall = time.time() - t_wall0
     summary = dict(
         condition=cond, seed=args.seed, duration=args.duration, log=log_path,
-        time_on_phone_frac=on_steps / max(1, n_steps), swipes=n_swipes, swipes_blocked=n_blocked, rewards=n_rewards,
+        time_on_phone_frac=on_steps / max(1, n_steps), swipes=n_swipes, swipes_forced=n_forced, swipes_blocked=n_blocked, rewards=n_rewards,
+        loaded_weights=loaded_meta, pin_on_phone=bool(args.pin_on_phone), forced_swipe_s=args.forced_swipe_s,
         final_w_ratio=w_ratio, wall_hits=body.wall_hits, wall_s=wall, ms_per_control_step=wall / n_steps * 1000,
         ms_eye_encode_per_step=t_eye / n_steps * 1000, ms_brain_per_step=t_brain / n_steps * 1000,
         pop_rates_hz={p: float(np.sum(rec.pop_counts[p]) / args.duration / max(1, pops[p].size)) for p in pops},
         mean_pop_rate_hz=float(np.sum(rec.total) / n_steps / SUBSTEPS / conn.n / brain.dt_s),
     )
+    if args.save_weights:
+        if not plasticity_on:
+            raise SystemExit("--save-weights needs the `dopamine` condition (plasticity on)")
+        ex = brain.export_plastic_weights()
+        payload: Dict[str, Any] = dict(source=np.array(tag), condition=np.array(cond), seed=np.int64(args.seed),
+                                       duration_s=np.float64(args.duration), rewards=np.int64(n_rewards))
+        payload.update(ex)
+        np.savez(args.save_weights, **payload)
+        summary["saved_weights"] = dict(path=args.save_weights, n_edges=int(ex["w"].size),
+                                        mean_w_over_w0=float((ex["w"] / ex["w0"]).mean()), min_w_over_w0=float((ex["w"] / ex["w0"]).min()))
+        print(f"saved {ex['w'].size} learned KC->MBON weights -> {args.save_weights}", flush=True)
     if args.spikes:
         sp = os.path.join(args.out_dir, f"{tag}_spikes.npz")
         rec.save(sp, extra=dict(control_dt=np.float32(CONTROL_DT)))

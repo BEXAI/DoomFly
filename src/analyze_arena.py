@@ -61,8 +61,8 @@ from matplotlib.patches import Rectangle
 import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CONDITIONS = ["real", "dopamine", "shuffled", "random"]
-COND_COLOR = {"real": "#25c9e8", "dopamine": "#ff9c3a", "shuffled": "#b48cff", "random": "#8a8f98"}
+CONDITIONS = ["real", "dopamine", "shuffled", "random", "trained"]
+COND_COLOR = {"real": "#25c9e8", "dopamine": "#ff9c3a", "shuffled": "#b48cff", "random": "#8a8f98", "trained": "#5ad46a"}
 SEED_COLORS = ["#25c9e8", "#ff9c3a", "#5ad46a", "#ff5c8a", "#f3e35a", "#b48cff", "#4dd0b8", "#ff7f50"]
 DEFAULT_SETS = {"kc": 4064, "mbon": 97, "pam": 316, "ppl1": 16, "dn_L": 656, "dn_R": 648,
                 "leg_L": 68, "leg_R": 67}
@@ -591,19 +591,20 @@ def analyse(out_dir: str, conds: List[str], seeds: List[int], prefix: str) -> di
             per_condition[cond][m] = summarise([rs[s][m] for s in ss], ss, rng, key=f"{cond}:{m}")
 
     comparisons: Dict[str, Any] = {}
-    if "dopamine" in runs and "real" in runs:
-        common = sorted(set(runs["dopamine"]) & set(runs["real"]))
-        paired: Dict[str, Any] = {"seeds": common, "n": len(common)}
-        for m in RUN_METRICS:
-            d = [(s, runs["dopamine"][s][m] - runs["real"][s][m]) for s in common
-                 if runs["dopamine"][s][m] is not None and runs["real"][s][m] is not None]
-            paired[m] = summarise([v for _, v in d], [s for s, _ in d], rng, key=f"paired:{m}")
-        top_d = [runs["dopamine"][s]["time_on_phone"] - runs["real"][s]["time_on_phone"] for s in common]
-        paired["time_on_phone_signflip_test"] = perm_test_paired(top_d, rng)
-        learn_d = [runs["dopamine"][s]["learning"] - runs["real"][s]["learning"] for s in common
-                   if runs["dopamine"][s]["learning"] is not None and runs["real"][s]["learning"] is not None]
-        paired["learning_signflip_test"] = perm_test_paired(learn_d, rng)
-        comparisons["dopamine_minus_real_paired"] = paired
+    for treat in ("dopamine", "trained"):
+        if treat in runs and "real" in runs:
+            common = sorted(set(runs[treat]) & set(runs["real"]))
+            paired: Dict[str, Any] = {"seeds": common, "n": len(common)}
+            for m in RUN_METRICS:
+                d = [(s, runs[treat][s][m] - runs["real"][s][m]) for s in common
+                     if runs[treat][s][m] is not None and runs["real"][s][m] is not None]
+                paired[m] = summarise([v for _, v in d], [s for s, _ in d], rng, key=f"paired:{m}")
+            top_d = [runs[treat][s]["time_on_phone"] - runs["real"][s]["time_on_phone"] for s in common]
+            paired["time_on_phone_signflip_test"] = perm_test_paired(top_d, rng)
+            learn_d = [runs[treat][s]["learning"] - runs["real"][s]["learning"] for s in common
+                       if runs[treat][s]["learning"] is not None and runs["real"][s]["learning"] is not None]
+            paired["learning_signflip_test"] = perm_test_paired(learn_d, rng)
+            comparisons[f"{treat}_minus_real_paired"] = paired
     if "real" in runs and "random" in runs:
         a = [r["time_on_phone"] for r in runs["real"].values()]
         b = [r["time_on_phone"] for r in runs["random"].values()]
@@ -616,6 +617,10 @@ def analyse(out_dir: str, conds: List[str], seeds: List[int], prefix: str) -> di
         a = [r["time_on_phone"] for r in runs["real"].values()]
         b = [r["time_on_phone"] for r in runs["shuffled"].values()]
         comparisons["real_vs_shuffled_time_on_phone"] = perm_test_unpaired(a, b, rng)
+    if "trained" in runs and "real" in runs:
+        a = [r["time_on_phone"] for r in runs["trained"].values()]
+        b = [r["time_on_phone"] for r in runs["real"].values()]
+        comparisons["trained_vs_real_time_on_phone_unpaired"] = perm_test_unpaired(a, b, rng)
 
     summary = dict(
         prefix=prefix, out_dir=out_dir, conditions=conds, seeds_requested=seeds, missing=missing,
@@ -654,13 +659,15 @@ def analyse(out_dir: str, conds: List[str], seeds: List[int], prefix: str) -> di
         for cond in conds:
             pc = per_condition[cond]
             print(f"{cond:<10}{pc['n_runs']:>3} " + " ".join(f"{fmt_ci(pc[m], nd, pc['n_runs']):>20}" for m, _, nd in cols))
-    if "dopamine_minus_real_paired" in comparisons:
-        p = comparisons["dopamine_minus_real_paired"]
-        print(f"dopamine - real (paired, n={p['n']}): time on phone {fmt_ci(p['time_on_phone'], 3)}, "
+    for treat in ("dopamine", "trained"):
+        if f"{treat}_minus_real_paired" not in comparisons:
+            continue
+        p = comparisons[f"{treat}_minus_real_paired"]
+        print(f"{treat} - real (paired, n={p['n']}): time on phone {fmt_ci(p['time_on_phone'], 3)}, "
               f"learning (h2-h1) {fmt_ci(p['learning'], 3)}, visits {fmt_ci(p['visits'], 1)}, "
               f"final w {fmt_ci(p['final_w_ratio'], 3)}; sign-flip p (time on phone) = {fmt(p['time_on_phone_signflip_test']['p'], 3)}, "
               f"p (learning) = {fmt(p['learning_signflip_test']['p'], 3)}")
-    for key in ("real_vs_random_time_on_phone", "real_vs_shuffled_time_on_phone", "dopamine_vs_real_time_on_phone_unpaired"):
+    for key in ("real_vs_random_time_on_phone", "real_vs_shuffled_time_on_phone", "dopamine_vs_real_time_on_phone_unpaired", "trained_vs_real_time_on_phone_unpaired"):
         if key in comparisons:
             c = comparisons[key]
             print(f"{key}: diff of means {fmt(c['observed'], 3)}, two-sided permutation p = {fmt(c['p'], 3)} "

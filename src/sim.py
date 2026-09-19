@@ -470,6 +470,40 @@ class Brain:
                     n_edges=int(p.pos.size),
                     n_kc_active_trace=int((p.trace > 0.1).sum()))
 
+    def export_plastic_weights(self) -> Dict[str, np.ndarray]:
+        """Current (learned) KC->MBON weights as (rows=MBON, cols=KC, w, w0) arrays, for saving
+        with np.savez and re-loading into a fresh Brain with :meth:`import_weights`."""
+        p = self._plast
+        if p is None:
+            raise RuntimeError("plasticity is not enabled; nothing to export")
+        return dict(rows=p.mbon_idx[p.m_of_edge].astype(np.int64), cols=p.kc_idx[p.kc_of_edge].astype(np.int64),
+                    w=self.W.data[p.pos].astype(np.float32, copy=True), w0=p.w0.astype(np.float32, copy=True))
+
+    def import_weights(self, rows, cols, w) -> int:
+        """Overwrite the stored weight of every existing edge W[row, col] (postsynaptic row,
+        presynaptic column) with ``w`` (in the Brain's own units, i.e. as exported by
+        :meth:`export_plastic_weights`).  Edges that do not exist raise.  Returns the count.
+        Call before :meth:`enable_plasticity` so the loaded weights become the new w0."""
+        rows = np.asarray(rows, np.int64); cols = np.asarray(cols, np.int64)
+        w = np.asarray(w, np.float32)
+        if not (rows.size == cols.size == w.size):
+            raise ValueError("rows, cols and w must have the same length")
+        if not isinstance(self.W, sp.csc_matrix):
+            self.W = sp.csc_matrix(self.W)
+        W = self.W
+        if not W.has_sorted_indices:
+            W.sort_indices()
+        indptr, indices = W.indptr, W.indices
+        pos = np.empty(rows.size, np.int64)
+        for i in range(rows.size):
+            c = int(cols[i]); lo, hi = int(indptr[c]), int(indptr[c + 1])
+            j = lo + int(np.searchsorted(indices[lo:hi], rows[i]))
+            if j >= hi or indices[j] != rows[i]:
+                raise ValueError(f"edge ({rows[i]}, {cols[i]}) does not exist in this connectome")
+            pos[i] = j
+        W.data[pos] = w
+        return int(pos.size)
+
     def plasticity_edges(self) -> Dict[str, np.ndarray]:
         """Per-edge view: neuron indices of the KC and MBON of each cached edge and w/w0."""
         p = self._plast

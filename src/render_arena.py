@@ -97,9 +97,10 @@ COND_LABELS = {
     "dopamine": ("REAL WIRING + DOPAMINE", "a novel post seen from the phone drives PAM → KC→MBON depression"),
     "shuffled": ("SHUFFLED WIRING", "same neurons, edges shuffled · brain steers · no dopamine"),
     "random": ("RANDOM WALK", "brain simulated but disconnected from the body · swipes never applied"),
+    "trained": ("TRAINED WIRING", "KC→MBON weights from 10 min of forced, rewarded scrolling · plasticity frozen · no dopamine"),
 }
-COND_ORDER = ("real", "dopamine", "shuffled", "random")
-COND_SHORT = {"real": "real", "dopamine": "dopamine", "shuffled": "shuffled", "random": "random"}
+COND_ORDER = ("real", "dopamine", "shuffled", "random", "trained")
+COND_SHORT = {"real": "real", "dopamine": "dopamine", "shuffled": "shuffled", "random": "random", "trained": "trained"}
 COL_ACCENT = (80, 200, 255)          # BGR amber: highlights, time-on-phone
 COL_REWARD = (90, 200, 255)          # BGR gold: reward flash
 COL_DOPA = (220, 80, 240)            # BGR magenta: dopamine / plasticity
