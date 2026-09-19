@@ -25,6 +25,7 @@ Metric definitions (per run; dt = meta.control_dt, default 16 ms):
                        novel.L or novel.R (false -> true) at a step i where on_phone is false and
                        i + 2 s lies inside the run; an approach means min(dist_mm[i+1 .. i+2 s])
                        < dist_mm[i] - 20 mm.  Rate = approaches / events; null if no events.
+                       dist_mm is used as logged (run_arena.py: body centre to phone centre).
   approach_random      the same statistic at matched random times: 20 x n_events step indices
                        drawn (seeded by the run seed) uniformly from the off-phone steps that have
                        2 s of run remaining.  approach_diff = approach_after_novel - approach_random.
@@ -32,8 +33,10 @@ Metric definitions (per run; dt = meta.control_dt, default 16 ms):
                        h2 - h1.
   *_hz                 mean population rate per cell for mbon / kc / pam (and every other set in
                        pops): mean per-step spike count / set size (meta.sets) / dt.
-  final_w_ratio        w_ratio on the last step; reward_events = rising edges of reward;
-                       reward_steps = steps with reward true.
+  final_w_ratio        w_ratio on the last step; reward_events = rising edges of reward (equal to
+                       the number of true steps when reward is a one-step event flag, as in
+                       run_arena.py, and to the number of events if it were held for the PAM
+                       window); reward_steps = steps with reward true.
 Across seeds: mean and 95 % bootstrap CI (2000 resamples of the seed means, seeded) per condition;
 dopamine - real paired by seed with the same bootstrap CI; two-sided permutation p-values on
 time_on_phone: real vs random (label permutation, exact enumeration when feasible) and dopamine
@@ -150,7 +153,14 @@ def phone_rects(meta: dict) -> Tuple[List[float], Dict[str, List[float]]]:
 def room_size(meta: dict) -> Tuple[float, float]:
     room = meta.get("room", {})
     if isinstance(room, dict):
+        size = room.get("size_mm")
+        if isinstance(size, (int, float)):
+            return float(size), float(size)
+        if isinstance(size, (list, tuple)) and len(size) == 2:
+            return float(size[0]), float(size[1])
         return float(room.get("w_mm") or room.get("w") or 400.0), float(room.get("h_mm") or room.get("h") or 400.0)
+    if isinstance(room, (int, float)):
+        return float(room), float(room)
     if isinstance(room, (list, tuple)) and len(room) == 2:
         return float(room[0]), float(room[1])
     return 400.0, 400.0
@@ -467,7 +477,7 @@ def fig_distance(runs: Dict[str, Dict[int, dict]], conds: List[str], path: str, 
             ax.fill_between(tt, mean - sd, mean + sd, color=c, alpha=0.15, lw=0)
         ax.plot(tt, mean, color=c, lw=1.6, label=f"{cond} (n={M.shape[0]})")
         any_line = True
-    ax.set_xlabel("time (s)"); ax.set_ylabel("distance to phone (mm, as logged in dist_mm)")
+    ax.set_xlabel("time (s)"); ax.set_ylabel("distance to phone centre (mm, dist_mm)")
     ax.set_ylim(bottom=0)
     ax.set_title(f"mean distance to the phone per condition, band = ±1 SD across seeds, {bin_s:g} s bins", fontsize=10)
     if any_line:

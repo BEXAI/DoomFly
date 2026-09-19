@@ -33,8 +33,9 @@ PHONE = (-79.0, -55.5, 79.0, 55.5)
 CONTROL_DT = 0.016
 REACH_MM = 22.0
 REACH_DEG = 35.0
-SETS = {"eye_L": 1770, "eye_R": 1785, "dn_L": 656, "dn_R": 648, "dna_L": 23, "dna_R": 22,
-        "leg_L": 68, "leg_R": 67, "kc": 4064, "mbon": 97, "pam": 316, "ppl1": 16}
+SETS = {"eye_L": 1770, "eye_R": 1785, "dn_L": 656, "dn_R": 648, "dna_L": 26, "dna_R": 26,
+        "leg_L": 68, "leg_R": 67, "kc": 4064, "mbon": 97, "pam": 316, "med_L": 4429, "med_R": 4445}
+POPS = [k for k in SETS if not k.startswith("med_")]   # sets logged per step (run_arena.py)
 # baseline rates (Hz per cell) for the Poisson pops
 BASE_HZ = {"eye_L": 2.0, "eye_R": 2.0, "dn_L": 0.3, "dn_R": 0.3, "dna_L": 0.4, "dna_R": 0.4,
            "leg_L": 0.8, "leg_R": 0.8, "kc": 0.4, "mbon": 4.0, "pam": 0.5}
@@ -50,12 +51,6 @@ def panel_under(x: float, y: float) -> Optional[str]:
     if in_rect(x, y, PANEL_R):
         return "R"
     return None
-
-
-def dist_to_rect(x: float, y: float, r: tuple) -> float:
-    dx = max(r[0] - x, 0.0, x - r[2])
-    dy = max(r[1] - y, 0.0, y - r[3])
-    return math.hypot(dx, dy)
 
 
 def wrap(a: float) -> float:
@@ -77,21 +72,24 @@ def parse_seeds(s: str) -> List[int]:
 def meta_for(cond: str, seed: int, duration: float) -> dict:
     biased = cond in ("real", "dopamine")
     return dict(
-        condition=cond, seed=seed, duration_s=duration, control_dt=CONTROL_DT, substeps=8,
+        condition=cond, seed=seed, duration=duration, control_dt=CONTROL_DT, substeps=8,
+        n_steps=int(round(duration / CONTROL_DT)),
         fixture=True,  # marks a fake log
-        room=dict(w_mm=ROOM, h_mm=ROOM, origin="centre"),
-        phone=dict(rect=list(PHONE), panels=dict(L=list(PANEL_L), R=list(PANEL_R))),
+        room=dict(size_mm=ROOM, origin="centre", x="right", y="up"),
+        phone=dict(centre=[0.0, 0.0], rect=list(PHONE), panels=dict(L=list(PANEL_L), R=list(PANEL_R)), panel_mm=[79.0, 111.0]),
         body=dict(v0=12.0, g_v=0.0 if cond == "random" else 6.0, g_omega=0.0 if cond == "random" else 3.0,
                   scale=10.0, body_len_mm=30.0, reach_mm=REACH_MM, reach_deg=REACH_DEG,
                   omega_sigma=1.2, omega_tau_s=0.5, v_stand_mm_s=3.0, v_max_mm_s=60.0),
         eye=dict(grid=[24, 18], cell_mm=2.0, d_min_mm=5.0, d_max_mm=300.0, az_deg_per_col=10.0),
         lif=dict(dt_ms=2.0, weight_scale=0.5, tau_m_ms=20.0, v_th_mv=-50.0, v_reset_mv=-70.0),
         plasticity=dict(enabled=cond == "dopamine", eta=0.05, tau_trace_s=1.0, w_floor=0.2),
-        reward=dict(pam_hz=100.0, duration_s=0.3, rule="rising edge of novel while on phone"),
+        reward=dict(rule="rising edge of novel_visible on either panel while on_phone", pam_hz=100.0, window_s=0.3,
+                    drives_pam=cond == "dopamine"),
         decoder=dict(mode="burst", burst_hz=1.5),
         shuffle=cond == "shuffled", brain_steers=cond != "random", biased_fixture_walk=biased,
         n_neurons=166700, n_edges=12_000_000,
         sets=dict(SETS),
+        notes="FIXTURE: synthetic walk, Poisson pops. dist_mm = body centre to phone centre; reward = one-step event flag.",
     )
 
 
@@ -204,24 +202,24 @@ def write_run(cond: str, seed: int, duration: float, out_dir: str, prefix: str) 
                     next_post[p] = float(rng.uniform(3, 9))
 
             # --- reward ------------------------------------------------------------------------
-            if on_phone and reward_left <= 0 and rising:
-                reward_left = int(round(0.3 / dt))
+            reward = bool(on_phone and rising)          # one-step event flag (run_arena.py)
+            if reward:
+                reward_left = int(round(0.3 / dt))       # PAM drive window (dopamine only)
                 n_reward += 1
                 if cond == "dopamine":
                     w_ratio = max(0.6, w_ratio * 0.98)
-            reward = reward_left > 0
-            if reward:
+            in_pam_window = reward_left > 0
+            if in_pam_window:
                 reward_left -= 1
 
             # --- pops --------------------------------------------------------------------------
             pops: Dict[str, int] = {}
-            for name, n in SETS.items():
-                if name == "ppl1":
-                    continue
+            for name in POPS:
+                n = SETS[name]
                 hz = BASE_HZ[name]
                 if name.startswith("dn") or name.startswith("dna"):
                     hz = hz + (burst_hz if burst else 0.0) * 0.5
-                if name == "pam" and reward and cond == "dopamine":
+                if name == "pam" and in_pam_window and cond == "dopamine":
                     hz = 100.0
                 if name == "mbon" and cond == "dopamine":
                     hz = hz * w_ratio
@@ -233,7 +231,7 @@ def write_run(cond: str, seed: int, duration: float, out_dir: str, prefix: str) 
             rec = {
                 "step": k, "t": round(t, 4),
                 "pose": {"x": round(x, 2), "y": round(y, 2), "th": round(th, 4), "v": round(v, 2)},
-                "on_phone": on_phone, "dist_mm": round(dist_to_rect(x, y, PHONE), 2),
+                "on_phone": on_phone, "dist_mm": round(math.hypot(x, y), 1),
                 "reach": reach, "swipe": swipe, "swipe_blocked": blocked,
                 "burst_hz": round(burst_hz, 3), "side_ev": round(side_ev, 3), "spikes": spikes,
                 "pops": pops, "reward": reward, "w_ratio": round(w_ratio, 5),

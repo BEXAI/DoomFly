@@ -29,3 +29,4 @@ out/analyze.py
 out/side_eval.py
 out/*.done
 out/*.sh
+out/arena_*
