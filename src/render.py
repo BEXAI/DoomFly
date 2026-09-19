@@ -63,6 +63,17 @@ NOMINAL_LEN_S = 50.0       # storyboard timings are specified for a 50 s episode
 DEVICE_QUAD = np.array([[68, 530], [1012, 530], [1068, 1265], [12, 1265]], np.float32)
 DEVICE_BEVEL = 26
 DEVICE_HINGE = 14
+# Photoreal open Duo (assets/duo_sprite.png + .json, built by src/build_device_sprite.py from the
+# reference photo): premultiplied RGBA with the two screens cut out; the feeds are perspective-warped
+# into the measured screen quads.  ``--device procedural`` falls back to the flat composite above.
+DEVICE_STYLE = "image"
+DEVICE_SPRITE_PNG = os.path.join(ROOT, "assets", "duo_sprite.png")
+DEVICE_SPRITE_JSON = os.path.join(ROOT, "assets", "duo_sprite.json")
+DEVICE_IMAGE_W = 900            # design px: rendered width of the sprite (1015 x 1028 px source -> 900 x 912)
+DEVICE_IMAGE_XY = (90, 520)     # design px: top-left corner of the sprite (hinge lands at x = 538)
+FEED_SCALE_IMAGE = 0.43         # feed raster scale for the sprite's ~800 px tall screens (1878 * 0.43 = 808)
+HUD_SHIFT_IMAGE = 110           # the taller sprite pushes the bottom HUD down by this many design px
+SPARK_SHRINK_IMAGE = 38         # ... and the sparkline gets this much shorter so the HUD still fits
 
 FLY_CENTER = (540, 945)    # thorax centre (design px)
 # Fly style: "image" composites the photoreal sprite built by src/build_fly_sprite.py (animated
@@ -593,6 +604,98 @@ class Device:
         roi = frame[y0:y1, x0:x1]
         cv2.copyTo(warped, self.wmask, roi)
         cv2.drawContours(roi, self.outline, -1, (18, 18, 20), 1, cv2.LINE_AA)
+
+
+class DeviceSprite:
+    """Photoreal open Duo from ``assets/duo_sprite.png`` (premultiplied RGBA with both screens cut
+    out, built by ``src/build_device_sprite.py``) with the live feeds perspective-warped into the
+    measured screen quads.  Same interface as :class:`Device` (``draw``, ``panel_centers``,
+    ``panel_bottoms``, ``to_frame``); ``footprint`` is the device silhouette for the drop shadow.
+    """
+
+    def __init__(self, k: float, panel_w: int, panel_h: int, png: str = DEVICE_SPRITE_PNG,
+                 meta_path: str = DEVICE_SPRITE_JSON, width_design: float = DEVICE_IMAGE_W,
+                 xy_design: Tuple[float, float] = DEVICE_IMAGE_XY):
+        self.k = k
+        self.pw, self.ph = panel_w, panel_h
+        rgba = cv2.imread(png, cv2.IMREAD_UNCHANGED)
+        if rgba is None or rgba.ndim != 3 or rgba.shape[2] != 4:
+            raise RuntimeError(f"cannot read RGBA sprite {png} (run src/build_device_sprite.py)")
+        with open(meta_path) as f:
+            J = json.load(f)
+        missing = [key for key in ("screens", "hinge_line") if key not in J]
+        missing += [f"screens.{sd}.quad" for sd in ("L", "R") if "quad" not in J.get("screens", {}).get(sd, {})]
+        if missing:
+            raise RuntimeError(f"{meta_path} lacks {missing}; re-run src/build_device_sprite.py")
+        h0, w0 = rgba.shape[:2]
+        S = width_design * k / w0                      # frame px per sprite px
+        self.S = S
+        W, H = max(2, int(round(w0 * S))), max(2, int(round(h0 * S)))
+        small = cv2.resize(rgba, (W, H), interpolation=cv2.INTER_AREA)   # premultiplied: resampling is exact
+        self.pm = small[..., :3].astype(np.float32)
+        self.inv = 1.0 - small[..., 3:4].astype(np.float32) / 255.0
+        # Compositing shortcut: opaque pixels are the sprite, fully transparent ones (the screen
+        # holes and the outside) are the canvas; only the ~5 % partial-alpha edge pixels are blended.
+        a8 = small[..., 3]
+        self.pm8 = np.ascontiguousarray(small[..., :3])
+        self.hole_mask = ((a8 == 0).astype(np.uint8) * 255)
+        self.part_yx = np.nonzero((a8 > 0) & (a8 < 255))
+        self.part_inv = self.inv[self.part_yx]              # (n, 1)
+        self.part_pm = self.pm[self.part_yx]                # (n, 3)
+        self.Wc, self.Hc = W, H
+        self.x0, self.y0 = int(round(xy_design[0] * k)), int(round(xy_design[1] * k))
+        self.roi = (self.x0, self.y0, self.x0 + W, self.y0 + H)
+        self.origin = np.array([self.x0, self.y0], np.float32)
+        # Screen quads are pixel-corner coordinates in the sprite; OpenCV addresses pixel centres (-0.5).
+        self.quads = {sd: np.asarray(J["screens"][sd]["quad"], np.float32) * S - 0.5 for sd in ("L", "R")}
+        self.quad = np.vstack([self.quads["L"], self.quads["R"]]) + self.origin
+        # Feeds are shrunk to the quad's on-screen size (INTER_AREA) before the bilinear warp.
+        self.tsize: Dict[str, Tuple[int, int]] = {}
+        self.Hm: Dict[str, np.ndarray] = {}
+        for sd, q in self.quads.items():
+            qw = 0.5 * (np.linalg.norm(q[1] - q[0]) + np.linalg.norm(q[2] - q[3]))
+            qh = 0.5 * (np.linalg.norm(q[3] - q[0]) + np.linalg.norm(q[2] - q[1]))
+            tw, th = max(2, int(round(qw))), max(2, int(round(qh)))
+            self.tsize[sd] = (tw, th)
+            src = np.array([[0, 0], [tw, 0], [tw, th], [0, th]], np.float32) - 0.5
+            self.Hm[sd] = cv2.getPerspectiveTransform(src, q)
+        hinge = np.asarray(J["hinge_line"], np.float32) * S - 0.5
+        self.hinge_x = float(hinge[:, 0].mean()) + self.x0
+        ys, xs = np.nonzero(small[..., 3] >= 128)
+        hull = cv2.convexHull(np.stack([xs, ys], axis=1).astype(np.int32)).reshape(-1, 2).astype(np.float32)
+        self.footprint = hull + self.origin
+
+    def to_frame(self, pts_panel: Sequence[Tuple[float, float]], side: str = "L") -> np.ndarray:
+        """Panel coordinates (0..pw, 0..ph, pixel corners) of one side -> frame pixel-centre coordinates."""
+        tw, th = self.tsize[side]
+        p = np.asarray(pts_panel, np.float32).reshape(-1, 1, 2) * np.array([tw / self.pw, th / self.ph], np.float32) - 0.5
+        return cv2.perspectiveTransform(p, self.Hm[side]).reshape(-1, 2) + self.origin
+
+    def panel_centers(self) -> Tuple[np.ndarray, np.ndarray]:
+        c = (self.pw / 2, self.ph / 2)
+        return self.to_frame([c], "L")[0], self.to_frame([c], "R")[0]
+
+    def panel_bottoms(self) -> Tuple[np.ndarray, np.ndarray]:
+        b = (self.pw / 2, self.ph)
+        return self.to_frame([b], "L")[0], self.to_frame([b], "R")[0]
+
+    def draw(self, frame: np.ndarray, feed_l: np.ndarray, feed_r: np.ndarray) -> None:
+        x0, y0, x1, y1 = self.roi
+        if x0 < 0 or y0 < 0 or x1 > frame.shape[1] or y1 > frame.shape[0]:
+            raise RuntimeError("device sprite does not fit inside the frame (check DEVICE_IMAGE_W / DEVICE_IMAGE_XY)")
+        canvas = np.ascontiguousarray(frame[y0:y1, x0:x1])
+        for sd, feed in (("L", feed_l), ("R", feed_r)):
+            tw, th = self.tsize[sd]
+            small = feed if feed.shape[1] == tw and feed.shape[0] == th else cv2.resize(feed, (tw, th), interpolation=cv2.INTER_AREA)
+            # BORDER_TRANSPARENT leaves every pixel outside the quad untouched, so both screens land on one canvas.
+            cv2.warpPerspective(small, self.Hm[sd], (self.Wc, self.Hc), dst=canvas, flags=cv2.INTER_LINEAR,
+                                borderMode=cv2.BORDER_TRANSPARENT)
+        out = self.pm8.copy()
+        cv2.copyTo(canvas, self.hole_mask, out)
+        blend = self.part_inv * canvas[self.part_yx].astype(np.float32) + self.part_pm
+        np.clip(blend, 0, 255, out=blend)
+        out[self.part_yx] = blend.astype(np.uint8)
+        frame[y0:y1, x0:x1] = out
 
 
 # --------------------------------------------------------------------------- #
@@ -1541,13 +1644,32 @@ class Renderer:
         seed_l = int(meta.get("seed_l", 1)) if meta else 1
         seed_r = int(meta.get("seed_r", 2)) if meta else 2
         ap_kw = {key: meta[key] for key in ("autoplay", "autoplay_amp", "autoplay_hz", "autoplay_whole") if meta and key in meta}
-        self.feed_l, self.feed_r = make_pair(seed_l, seed_r, scale=FEED_SCALE * k, **ap_kw)
+        # Replay the same feed type the episode was run with (cards, or pre-generated reels clips).
+        feed_mode = str(meta.get("feed_mode", "cards")) if meta else "cards"
+        clips_dir = str(meta.get("clips_dir", "assets/clips")) if meta else "assets/clips"
+        if not os.path.isabs(clips_dir) and not os.path.isdir(clips_dir):
+            clips_dir = os.path.join(ROOT, clips_dir)
+        device_style = getattr(args, "device", DEVICE_STYLE)
+        if device_style == "image" and not (os.path.exists(DEVICE_SPRITE_PNG) and os.path.exists(DEVICE_SPRITE_JSON)):
+            print(f"warning: {DEVICE_SPRITE_PNG} / .json missing (run src/build_device_sprite.py); using the procedural device", file=sys.stderr)
+            device_style = "procedural"
+        self.device_style = device_style
+        feed_scale = FEED_SCALE_IMAGE if device_style == "image" else FEED_SCALE
+        self.feed_l, self.feed_r = make_pair(seed_l, seed_r, scale=feed_scale * k, mode=feed_mode, clips_dir=clips_dir, **ap_kw)
         pw, ph = self.feed_l.out_w, self.feed_l.out_h
 
         self.text = TextRenderer(k)
-        quad = DEVICE_QUAD * k
-        self.bg = build_background(self.W, self.H, k, quad)
-        self.device = Device(k, pw, ph, DEVICE_QUAD, self.feed_l.theme["hinge"])
+        self.device: Any
+        if device_style == "image":
+            self.device = DeviceSprite(k, pw, ph)
+            self.bg = build_background(self.W, self.H, k, self.device.footprint)
+            self.hud_shift = HUD_SHIFT_IMAGE
+            self.spark_shrink = SPARK_SHRINK_IMAGE
+        else:
+            self.device = Device(k, pw, ph, DEVICE_QUAD, self.feed_l.theme["hinge"])
+            self.bg = build_background(self.W, self.H, k, DEVICE_QUAD * k)
+            self.hud_shift = 0
+            self.spark_shrink = 0
         fly_style = getattr(args, "fly", FLY_STYLE)
         if fly_style == "image" and not (os.path.exists(FLY_SPRITE_PNG) and os.path.exists(FLY_SPRITE_JSON)):
             print(f"warning: {FLY_SPRITE_PNG} / .json missing (run src/build_fly_sprite.py); using the procedural fly", file=sys.stderr)
@@ -1709,33 +1831,34 @@ class Renderer:
         T = self.text
         k = self.k
         pb_l, pb_r = self.device.panel_bottoms()
+        sh = self.hud_shift                       # design px; the photoreal device is taller than the flat one
         # SWIPE flashes under each panel
         for side, pb in (("L", pb_l), ("R", pb_r)):
             age = t - self.swipe_time[side]
             if 0 <= age < 0.6:
                 a = clamp(1.0 - age / 0.6, 0, 1)
                 colr = COL_L if side == "L" else COL_R
-                yy = 1286 - 12 * ease_out(age / 0.6)
+                yy = (1286 if sh == 0 else pb[1] / k + 22) - 12 * ease_out(age / 0.6)
                 T.draw(frame, "↑ SWIPE", pb[0] / k, yy, 40, colr, True, align="center", alpha=a)
         # POSTS counters
-        T.draw(frame, "POSTS L", 60, 1350, 30, COL_L)
-        T.draw(frame, f"{self.posts['L']}", 60, 1382, 64, COL_WHITE, True)
-        T.draw(frame, "POSTS R", 1020, 1350, 30, COL_R, align="right")
-        T.draw(frame, f"{self.posts['R']}", 1020, 1382, 64, COL_WHITE, True, align="right")
-        T.draw(frame, "SWIPES", 540, 1350, 30, COL_GREY, align="center")
-        T.draw(frame, f"{self.total_swipes['L'] + self.total_swipes['R']}", 540, 1382, 64, COL_WHITE, True, align="center")
+        T.draw(frame, "POSTS L", 60, 1350 + sh, 30, COL_L)
+        T.draw(frame, f"{self.posts['L']}", 60, 1382 + sh, 64, COL_WHITE, True)
+        T.draw(frame, "POSTS R", 1020, 1350 + sh, 30, COL_R, align="right")
+        T.draw(frame, f"{self.posts['R']}", 1020, 1382 + sh, 64, COL_WHITE, True, align="right")
+        T.draw(frame, "SWIPES", 540, 1350 + sh, 30, COL_GREY, align="center")
+        T.draw(frame, f"{self.total_swipes['L'] + self.total_swipes['R']}", 540, 1382 + sh, 64, COL_WHITE, True, align="center")
         # whole-brain activity
         hist = np.asarray(self.spike_hist, np.float32)
         recent = hist[-8:] if hist.size else np.zeros(1, np.float32)
         sps = float(recent.mean()) / CTRL_DT
         hz = sps / max(self.n_neurons, 1)
-        T.draw(frame, "WHOLE-BRAIN ACTIVITY", 60, 1490, 30, COL_GREY)
-        T.draw(frame, f"{sps:,.0f}", 60, 1522, 60, COL_WHITE, True)
+        T.draw(frame, "WHOLE-BRAIN ACTIVITY", 60, 1490 + sh, 30, COL_GREY)
+        T.draw(frame, f"{sps:,.0f}", 60, 1522 + sh, 60, COL_WHITE, True)
         wnum = T.measure(f"{sps:,.0f}", 60, True) / k
-        T.draw(frame, "spikes / s", 60 + wnum + 18, 1552, 30, COL_GREY)
-        T.draw(frame, f"≈ {hz:.2f} Hz / neuron", 1020, 1548, 30, COL_GREY, align="right")
+        T.draw(frame, "spikes / s", 60 + wnum + 18, 1552 + sh, 30, COL_GREY)
+        T.draw(frame, f"≈ {hz:.2f} Hz / neuron", 1020, 1548 + sh, 30, COL_GREY, align="right")
         # sparkline
-        x0, y0, x1, y1 = int(60 * k), int(1612 * k), int(1020 * k), int(1750 * k)
+        x0, y0, x1, y1 = int(60 * k), int((1612 + sh) * k), int(1020 * k), int((1750 + sh - self.spark_shrink) * k)
         fill_panel(frame, x0, y0, x1, y1, int(18 * k), (14, 14, 18), 0.85, border=(50, 50, 60))
         if hist.size >= 2:
             n_show = self.spike_hist.maxlen or 1
@@ -1751,8 +1874,8 @@ class Renderer:
             cv2.addWeighted(roi, 0.65, over, 0.35, 0, dst=roi)
             cv2.polylines(frame, [pts], False, (210, 190, 120), max(1, int(round(3 * k))), cv2.LINE_AA)
             cv2.circle(frame, tuple(pts[-1, 0]), int(6 * k), COL_WHITE, -1, cv2.LINE_AA)
-        T.draw(frame, "spikes per 16 ms step · last 3 s", 80, 1620, 22, COL_DIM)
-        T.draw(frame, "eyes see the feeds · legs swipe · nothing scripted", 540, 1800, 30, COL_DIM, align="center")
+        T.draw(frame, "spikes per 16 ms step · last 3 s", 80, 1620 + sh, 22, COL_DIM)
+        T.draw(frame, "eyes see the feeds · legs swipe · nothing scripted", 540, 1800 + sh - self.spark_shrink, 30, COL_DIM, align="center")
 
     # ---- storyboard cards ----------------------------------------------------------------
     def draw_card(self, frame: np.ndarray, blocks: List[Tuple[str, float, Tuple[int, int, int], bool]],
@@ -1959,6 +2082,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     ap.add_argument("--preset", default="fast", help="x264 preset")
     ap.add_argument("--fly", choices=("image", "procedural"), default=FLY_STYLE,
                     help="fly rendering: photoreal sprite (assets/fly_sprite.png) or the procedural 2.5D fly")
+    ap.add_argument("--device", choices=("image", "procedural"), default=DEVICE_STYLE,
+                    help="device rendering: photoreal Duo sprite (assets/duo_sprite.png) or the flat procedural composite")
     return ap.parse_args(argv)
 
 

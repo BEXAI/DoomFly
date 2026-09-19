@@ -524,7 +524,11 @@ class ArenaRenderer:
         seed_r = _as_int(fmeta.get("seed_r", self.meta.get("seed_r")), 2)
         ap_kw = {key: (fmeta.get(key, self.meta.get(key))) for key in ("autoplay", "autoplay_amp", "autoplay_hz", "autoplay_whole")
                  if key in fmeta or key in self.meta}
-        self.feed_l, self.feed_r = make_pair(seed_l, seed_r, scale=fscale, **ap_kw)
+        feed_mode = str(meta.get("feed_mode", "cards")) if meta else "cards"
+        clips_dir = str(meta.get("clips_dir", "assets/clips")) if meta else "assets/clips"
+        if not os.path.isabs(clips_dir) and not os.path.isdir(clips_dir):
+            clips_dir = os.path.join(ROOT, clips_dir)
+        self.feed_l, self.feed_r = make_pair(seed_l, seed_r, scale=fscale, mode=feed_mode, clips_dir=clips_dir, **ap_kw)
         pw, ph = self.feed_l.out_w, self.feed_l.out_h
         B = max(4, int(round(26 * self.kd)))
         Wc, Hc = 2 * pw + G + 2 * B, ph + 2 * B
