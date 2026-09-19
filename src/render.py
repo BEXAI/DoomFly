@@ -21,7 +21,7 @@ Usage::
     python3 src/render.py --events out/events.jsonl --spikes out/spikes.npz \
         --positions data/graph/positions.npy --out out/final.mp4 [--duration S]
         [--fixture] [--preview] [--stats stats.json] [--png-dir DIR --png-every N]
-        [--stills 1,6,9]
+        [--stills 1,6,9] [--fly image|procedural]
 
 ``--fixture`` generates a synthetic episode (random point cloud, Poisson spikes with
 bursts, alternating swipes) when any input is missing, so the renderer can be
@@ -65,6 +65,13 @@ DEVICE_BEVEL = 26
 DEVICE_HINGE = 14
 
 FLY_CENTER = (540, 945)    # thorax centre (design px)
+# Fly style: "image" composites the photoreal sprite built by src/build_fly_sprite.py (animated
+# procedural front legs only); "procedural" is the fully synthetic 2.5D fly.
+FLY_STYLE = "image"
+FLY_SPRITE_PNG = os.path.join(ROOT, "assets", "fly_sprite.png")
+FLY_SPRITE_JSON = os.path.join(ROOT, "assets", "fly_sprite.json")
+FLY_IMAGE_CENTER = (540, 900)   # thorax centre in image mode (a little higher: the photo's legs reach further back)
+FLY_IMAGE_BODY_LEN = 320        # head top -> abdomen tip, design px (procedural fly: ~330)
 SWIPE_ANIM_S = 0.42        # reach 0.10 s, drag 0.22 s, return 0.10 s
 SWIPE_DRAG_PX = 130        # tarsus travel (forward = toward the head = content scrolls up)
 
@@ -142,6 +149,21 @@ def alpha_blit(frame: np.ndarray, bgr: np.ndarray, alpha: np.ndarray, x: int, y:
     roi = frame[y0:y1, x0:x1]
     src = bgr[sy : sy + (y1 - y0), sx : sx + (x1 - x0)]
     roi[:] = (roi.astype(np.float32) * (1.0 - a) + src.astype(np.float32) * a).astype(np.uint8)
+
+
+def premul_blit(frame: np.ndarray, pm: np.ndarray, alpha: np.ndarray, x: int, y: int) -> None:
+    """Composite a premultiplied sprite: out = pm + (1 - alpha) * frame  (``pm``, ``alpha`` uint8)."""
+    H, W = frame.shape[:2]
+    h, w = alpha.shape[:2]
+    x0, y0 = max(0, x), max(0, y)
+    x1, y1 = min(W, x + w), min(H, y + h)
+    if x1 <= x0 or y1 <= y0:
+        return
+    sx, sy = x0 - x, y0 - y
+    a = alpha[sy : sy + (y1 - y0), sx : sx + (x1 - x0)].astype(np.float32) * (1.0 / 255.0)
+    roi = frame[y0:y1, x0:x1]
+    src = pm[sy : sy + (y1 - y0), sx : sx + (x1 - x0)].astype(np.float32)
+    roi[:] = np.clip(roi.astype(np.float32) * (1.0 - a[..., None]) + src, 0, 255).astype(np.uint8)
 
 
 def fill_panel(frame: np.ndarray, x0: int, y0: int, x1: int, y1: int, r: int, color, alpha: float,
@@ -684,7 +706,13 @@ class _Layer:
 
 
 class Fly:
-    """Top-down 2.5D Drosophila: shaded body sprite (built once, 2x supersampled) + procedural legs."""
+    """Top-down Drosophila perched over the hinge.
+
+    style="image": the photoreal sprite from assets/fly_sprite.png (premultiplied RGBA built by
+    src/build_fly_sprite.py; body, wings, antennae and mid/hind legs are part of the image) with
+    the animated FRONT legs drawn procedurally underneath it from the JSON thorax attach points.
+    style="procedural": shaded body sprite (built once, 2x supersampled) + all legs procedural.
+    """
 
     # Design-space geometry relative to the thorax centre; +x = viewer's right = fly's right
     # (head toward the top of the frame, so the fly's left is the viewer's left).
@@ -693,16 +721,78 @@ class Fly:
     LEG_THICK = {"front": (8, 6, 4), "mid": (7, 5, 3), "hind": (8, 5, 3)}
     EYE_CENTER = (28, -80)
 
-    def __init__(self, k: float, center_px: Tuple[float, float]):
+    def __init__(self, k: float, center_px: Tuple[float, float], style: str = "procedural"):
         self.k = k
         self.cx, self.cy = center_px
+        self.style = style
         self.canvas_origin = (120, 150)  # design px offset of thorax centre inside the sprite
-        self.sprite_bgr, self.sprite_a = self._build_sprite()
-        self.shadow_a, self.shadow_origin = self._build_contact_shadow()
         self.leg_color = LEG_COL
         self.leg_edge = LEG_EDGE
+        self.leg_light = LEG_LIGHT
+        self.leg_joint = LEG_JOINT
+        self.leg_thick_front = self.LEG_THICK["front"]
         self.rng = np.random.default_rng(11)
         self.twitch_phase = self.rng.uniform(0, 6.28, 2)
+        if style == "image":
+            self._load_image_sprite()
+        else:
+            self.sprite_bgr, self.sprite_a = self._build_sprite()
+            self.shadow_a, self.shadow_origin = self._build_contact_shadow()
+
+    # ---- photoreal sprite (assets/fly_sprite.png + .json, see src/build_fly_sprite.py) -------
+    def _load_image_sprite(self) -> None:
+        """Load the premultiplied RGBA sprite, scale it so the body length matches the procedural
+        fly, and convert the JSON anchors (sprite px) into design-px offsets from the thorax."""
+        k = self.k
+        rgba = cv2.imread(FLY_SPRITE_PNG, cv2.IMREAD_UNCHANGED)
+        with open(FLY_SPRITE_JSON) as f:
+            J = json.load(f)
+        if rgba is None or rgba.ndim != 3 or rgba.shape[2] != 4:
+            raise RuntimeError(f"cannot read RGBA sprite {FLY_SPRITE_PNG} (run src/build_fly_sprite.py)")
+        s = FLY_IMAGE_BODY_LEN / float(J["body_length_px"])       # design px per sprite px
+        S = s * k                                                   # frame px per sprite px
+        bc = np.asarray(J["body_center"], np.float32)
+        out_w, out_h = max(1, int(round(rgba.shape[1] * S))), max(1, int(round(rgba.shape[0] * S)))
+        # premultiplied colour and alpha may be resampled independently (linear in both)
+        pm = cv2.resize(rgba[..., :3], (out_w, out_h), interpolation=cv2.INTER_AREA)
+        a8 = cv2.resize(rgba[..., 3], (out_w, out_h), interpolation=cv2.INTER_AREA)
+        self.sprite_bgr, self.sprite_a = pm, a8
+        self.img_scale = s
+        self.img_origin = (float(bc[0]) * S, float(bc[1]) * S)     # frame px from sprite corner to thorax
+
+        def D(p) -> Tuple[float, float]:                            # sprite px -> design px rel. thorax
+            return (float(p[0] - bc[0]) * s, float(p[1] - bc[1]) * s)
+
+        self.img_eyes = (D(J["eye_left"]), D(J["eye_right"]))
+        self.img_attach = {-1: D(J["front_leg_attach"]["left"]), 1: D(J["front_leg_attach"]["right"])}
+        rest = J["front_leg_rest"]
+        self.img_rest_tip = {-1: D(rest["left"]["tip"]), 1: D(rest["right"]["tip"])}
+        # fixed segment lengths (design px) and the tarsus angle relative to the attach->tip line
+        seg = []
+        tars_ang = {}
+        for side, key in ((-1, "left"), (1, "right")):
+            A = np.asarray(self.img_attach[side], np.float32)
+            kn, an, tp = (np.asarray(D(rest[key][j]), np.float32) for j in ("knee", "ankle", "tip"))
+            seg.append((float(np.hypot(*(kn - A))), float(np.hypot(*(an - kn))), float(np.hypot(*(tp - an)))))
+            d, tar = tp - A, tp - an
+            tars_ang[side] = math.atan2(tar[1], tar[0]) - math.atan2(d[1], d[0])
+        self.img_seg = tuple(float(np.mean([sg[i] for sg in seg])) for i in range(3))
+        self.img_tarsus_ang = tars_ang
+        w = J.get("front_leg_width_px", [24, 14, 10])
+        self.leg_thick_front = tuple(float(v) * s for v in w)       # type: ignore[assignment]
+        col = J.get("leg_color_bgr", {})
+        mid = tuple(int(v) for v in col.get("mid", LEG_COL))
+        dark = tuple(int(v) for v in col.get("dark", LEG_EDGE))
+        light = tuple(int(v) for v in col.get("light", LEG_LIGHT))
+        self.leg_color = mid                                        # type: ignore[assignment]
+        self.leg_edge = tuple(int(v * 0.55) for v in dark)          # type: ignore[assignment]
+        self.leg_light = light                                      # type: ignore[assignment]
+        self.leg_joint = tuple(int(0.5 * m + 0.5 * d) for m, d in zip(mid, dark))  # type: ignore[assignment]
+        # contact shadow from the sprite's own silhouette (body + legs; wings contribute less)
+        a = a8.astype(np.float32) / 255.0
+        sh = cv2.GaussianBlur(a ** 1.6, (0, 0), 7.0 * max(k, 0.5))
+        self.shadow_a = (np.clip(sh, 0, 1) * 0.55 * 255).astype(np.uint8)
+        self.shadow_origin = (int(round(self.img_origin[0] - 9 * k)), int(round(self.img_origin[1] - 14 * k)))
 
     # ---- sprite -----------------------------------------------------------------
     def _build_sprite(self) -> Tuple[np.ndarray, np.ndarray]:
@@ -917,8 +1007,11 @@ class Fly:
     # ---- per-frame ------------------------------------------------------------------
     def eye_positions(self, t: float) -> Tuple[Tuple[float, float], Tuple[float, float]]:
         bob = self._bob(t)
-        ex, ey = self.EYE_CENTER
         k = self.k
+        if self.style == "image":
+            (lx, ly), (rx, ry) = self.img_eyes
+            return ((self.cx + lx * k, self.cy + (ly + bob) * k), (self.cx + rx * k, self.cy + (ry + bob) * k))
+        ex, ey = self.EYE_CENTER
         return ((self.cx - ex * k, self.cy + (ey + bob) * k), (self.cx + ex * k, self.cy + (ey + bob) * k))
 
     def _bob(self, t: float) -> float:
@@ -932,12 +1025,17 @@ class Fly:
         return z
 
     def _front_tip(self, side: int, age: Optional[float]) -> Tuple[float, float]:
-        rx, ry = self.LEG_REST["front"]
-        rest = (side * rx, ry)
+        if self.style == "image":
+            rest = self.img_rest_tip[side]
+            reach = (side * 6.0, 14.0)      # the photo's leg is nearly straight: little slack to reach with
+        else:
+            rx, ry = self.LEG_REST["front"]
+            rest = (side * rx, ry)
+            reach = (side * 18.0, 56.0)
         if age is None or age < 0 or age >= SWIPE_ANIM_S:
             return rest
         t_reach, t_drag = 0.10, 0.32
-        plant = (rest[0] + side * 18, rest[1] + 56)
+        plant = (rest[0] + reach[0], rest[1] + reach[1])
         end = (plant[0] + side * 6, plant[1] - SWIPE_DRAG_PX)
         if age < t_reach:
             p = ease_in_out(age / t_reach)
@@ -948,7 +1046,37 @@ class Fly:
         p = ease_in_out((age - t_drag) / (SWIPE_ANIM_S - t_drag))
         return (end[0] + (rest[0] - end[0]) * p, end[1] + (rest[1] - end[1]) * p)
 
+    def _leg_points_ik(self, side: int, A: np.ndarray, T: np.ndarray) -> List[np.ndarray]:
+        """Image mode: femur / tibia / tarsus of fixed length (measured on the photo's legs).
+        The tarsus keeps its rest angle to the attach->tip line; femur + tibia reach the ankle by
+        two-bone IK with the knee bending outward/forward (stretched proportionally if out of reach)."""
+        k = self.k
+        lf, lt, lta = (v * k for v in self.img_seg)
+        d = T - A
+        Ln = float(np.hypot(*d)) + 1e-6
+        u = d / Ln
+        n = np.array([-u[1], u[0]], np.float32)
+        if n[0] * side + n[1] * (-0.45) < 0:
+            n = -n
+        ang = math.atan2(u[1], u[0]) + self.img_tarsus_ang[side]
+        ankle = T - np.array([math.cos(ang), math.sin(ang)], np.float32) * lta
+        e = ankle - A
+        De = float(np.hypot(*e)) + 1e-6
+        ue = e / De
+        if De >= lf + lt - 1e-3:
+            knee = A + ue * (De * lf / (lf + lt))
+        else:
+            a = (lf * lf - lt * lt + De * De) / (2.0 * De)
+            h = math.sqrt(max(lf * lf - a * a, 0.0))
+            ne = np.array([-ue[1], ue[0]], np.float32)
+            if float(ne @ n) < 0:
+                ne = -ne
+            knee = A + ue * a + ne * h
+        return [A, knee.astype(np.float32), ankle.astype(np.float32), T]
+
     def _leg_points(self, name: str, side: int, A: np.ndarray, T: np.ndarray) -> List[np.ndarray]:
+        if self.style == "image" and name == "front":
+            return self._leg_points_ik(side, A, T)
         d = T - A
         Ln = float(np.hypot(*d)) + 1e-6
         u = d / Ln
@@ -960,7 +1088,7 @@ class Fly:
         ankle = A + u * (0.86 * Ln) + n * (0.10 * Ln)
         return [A, knee, ankle, T]
 
-    def _draw_leg(self, frame: np.ndarray, pts: List[np.ndarray], th: Tuple[int, int, int]) -> None:
+    def _draw_leg(self, frame: np.ndarray, pts: List[np.ndarray], th: Sequence[float]) -> None:
         k = self.k
         # 1) dark outline, 2) body, 3) light stripe offset toward the key light (cylinder shading)
         for i in range(3):
@@ -979,15 +1107,15 @@ class Fly:
             w = th[i] * 0.34 * k
             if w >= 0.8:
                 p0, p1 = _pt(pts[i] + off), _pt(pts[i + 1] + off)
-                cv2.line(frame, p0, p1, LEG_LIGHT, max(1, int(round(w))), cv2.LINE_AA)
+                cv2.line(frame, p0, p1, self.leg_light, max(1, int(round(w))), cv2.LINE_AA)
         # rounded joints with a small highlight
         for j, r_ in ((1, th[0] * 0.62), (2, th[1] * 0.60)):
             c = _pt(pts[j])
             rr = max(1, int(round(r_ * k)))
             cv2.circle(frame, c, rr + max(1, int(round(1.2 * k))), self.leg_edge, -1, cv2.LINE_AA)
-            cv2.circle(frame, c, rr, LEG_JOINT, -1, cv2.LINE_AA)
+            cv2.circle(frame, c, rr, self.leg_joint, -1, cv2.LINE_AA)
             hc = _pt(pts[j] + np.array([KEY_LIGHT[0], KEY_LIGHT[1]]) * (r_ * 0.35 * k))
-            cv2.circle(frame, hc, max(1, int(round(r_ * 0.33 * k))), LEG_LIGHT, -1, cv2.LINE_AA)
+            cv2.circle(frame, hc, max(1, int(round(r_ * 0.33 * k))), self.leg_light, -1, cv2.LINE_AA)
         # claw at the tarsus tip
         d = pts[3] - pts[2]
         Ln = float(np.hypot(*d)) + 1e-6
@@ -1006,11 +1134,16 @@ class Fly:
         def F(x: float, y: float, with_bob: bool = True) -> Tuple[int, int]:
             return int(round(ox + x * k)), int(round((oy if with_bob else self.cy) + y * k))
 
+        image_mode = self.style == "image"
         legs: List[Tuple[str, int, List[np.ndarray]]] = []
-        for name in ("hind", "mid", "front"):
+        for name in (("front",) if image_mode else ("hind", "mid", "front")):
             ax, ay = self.LEG_ATTACH[name]
             for side in (-1, 1):
-                A = np.asarray(F(side * ax, ay), np.float32)
+                if image_mode:
+                    ax_, ay_ = self.img_attach[side]
+                    A = np.asarray(F(ax_, ay_), np.float32)
+                else:
+                    A = np.asarray(F(side * ax, ay), np.float32)
                 if name == "front":
                     age = swipe_age["L"] if side < 0 else swipe_age["R"]
                     tx, ty = self._front_tip(side, age)
@@ -1021,13 +1154,18 @@ class Fly:
                 legs.append((name, side, self._leg_points(name, side, A, T)))
 
         # ---- shadows on the device: soft contact shadow under the body + leg shadows ----
-        x0, y0 = max(0, int(ox - 250 * k)), max(0, int(oy - 175 * k))
-        x1, y1 = min(W, int(ox + 250 * k)), min(H, int(oy + 240 * k))
+        if image_mode:
+            sw, shh = self.shadow_a.shape[1], self.shadow_a.shape[0]
+            x0, y0 = max(0, int(ox - self.shadow_origin[0] - 40 * k)), max(0, int(oy - self.shadow_origin[1] - 40 * k))
+            x1, y1 = min(W, x0 + sw + int(80 * k)), min(H, y0 + shh + int(80 * k))
+        else:
+            x0, y0 = max(0, int(ox - 250 * k)), max(0, int(oy - 175 * k))
+            x1, y1 = min(W, int(ox + 250 * k)), min(H, int(oy + 240 * k))
         if x1 > x0 and y1 > y0:
             sh = np.zeros((y1 - y0, x1 - x0), np.uint8)
             offs = np.array([x0 - 9 * k, y0 - 15 * k], np.float32)
             for name, side, pts in legs:
-                th = self.LEG_THICK[name]
+                th = self.leg_thick_front if name == "front" else self.LEG_THICK[name]
                 for i in range(3):
                     cv2.line(sh, _pt(pts[i] - offs), _pt(pts[i + 1] - offs), 255, max(1, int(round((th[i] + 1.5) * k))), cv2.LINE_AA)
             sh = cv2.GaussianBlur(sh, (0, 0), 4.0 * max(k, 0.5))
@@ -1039,7 +1177,7 @@ class Fly:
 
         # ---- legs (under the body) ----
         for name, side, pts in legs:
-            self._draw_leg(frame, pts, self.LEG_THICK[name])
+            self._draw_leg(frame, pts, self.leg_thick_front if name == "front" else self.LEG_THICK[name])
             # tarsus contact ring while dragging
             if name == "front":
                 age = swipe_age["L"] if side < 0 else swipe_age["R"]
@@ -1049,6 +1187,13 @@ class Fly:
                     colr = COL_L if side < 0 else COL_R
                     cc = tuple(int(c * a + 40 * (1 - a)) for c in colr)
                     cv2.circle(frame, _pt(pts[3]), int(round((16 + 14 * (1 - a)) * k)), cc, max(1, int(round(3.5 * k))), cv2.LINE_AA)
+
+        if image_mode:
+            # ---- photoreal body (wings, antennae, mid/hind legs included), premultiplied ----
+            sx = int(round(ox - self.img_origin[0]))
+            sy = int(round(oy - self.img_origin[1]))
+            premul_blit(frame, self.sprite_bgr, self.sprite_a, sx, sy)
+            return
 
         # ---- antennae (idle twitch) ----
         for i, side in enumerate((-1, 1)):
@@ -1343,7 +1488,12 @@ class Renderer:
         quad = DEVICE_QUAD * k
         self.bg = build_background(self.W, self.H, k, quad)
         self.device = Device(k, pw, ph, DEVICE_QUAD, self.feed_l.theme["hinge"])
-        self.fly = Fly(k, (FLY_CENTER[0] * k, FLY_CENTER[1] * k))
+        fly_style = getattr(args, "fly", FLY_STYLE)
+        if fly_style == "image" and not (os.path.exists(FLY_SPRITE_PNG) and os.path.exists(FLY_SPRITE_JSON)):
+            print(f"warning: {FLY_SPRITE_PNG} / .json missing (run src/build_fly_sprite.py); using the procedural fly", file=sys.stderr)
+            fly_style = "procedural"
+        fc = FLY_IMAGE_CENTER if fly_style == "image" else FLY_CENTER
+        self.fly = Fly(k, (fc[0] * k, fc[1] * k), style=fly_style)
         self.pip = BrainPiP(positions, groups, self.n_neurons, int(PIP_SIZE * k), k)
         self.pip_mask = rounded_mask(int(PIP_SIZE * k), int(PIP_SIZE * k), int(26 * k))
         pc_l, pc_r = self.device.panel_centers()
@@ -1709,6 +1859,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     ap.add_argument("--png-every", type=int, default=60, help="dump every N written frames")
     ap.add_argument("--stills", default=None, help="comma-separated video times (s) saved as render_still_*.png next to --out")
     ap.add_argument("--preset", default="fast", help="x264 preset")
+    ap.add_argument("--fly", choices=("image", "procedural"), default=FLY_STYLE,
+                    help="fly rendering: photoreal sprite (assets/fly_sprite.png) or the procedural 2.5D fly")
     return ap.parse_args(argv)
 
 
