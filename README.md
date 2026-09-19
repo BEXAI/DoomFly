@@ -275,6 +275,9 @@ python3 src/run_episode.py --duration 50 --seed 4 --tag final_s4          # the 
 python3 src/run_episode.py --duration 50 --tag shuffled --shuffle 0 --no-spikes   # wiring-shuffled control
 python3 src/run_episode.py --duration 30 --tag side_real --no-spikes --scripted L:15,R:15   # open-loop side test
 python3 src/analyze_episode.py final_s4 shuffled          # figures + JSON
+# optional, the rejected ridge readout of §5.4:
+python3 src/run_episode.py --mode teacher --duration 100 --teacher-gap 1.0 1.8 --no-spikes --out-dir out/calib
+python3 src/decoder.py fit out/calib/calib.npz out/calib/readout.npz
 python3 src/render.py --events out/events_final_s4.jsonl --spikes out/spikes_final_s4.npz \
         --positions data/graph/positions.npy --groups data/graph/groups.npy --out out/final.mp4
 ```
