@@ -30,3 +30,4 @@ out/side_eval.py
 out/*.done
 out/*.sh
 out/arena_*
+out/baseline/
