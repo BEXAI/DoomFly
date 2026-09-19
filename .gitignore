@@ -27,3 +27,5 @@ out/summary_lat_*
 out/*.out
 out/analyze.py
 out/side_eval.py
+out/*.done
+out/*.sh
