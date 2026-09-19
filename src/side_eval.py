@@ -26,11 +26,11 @@ def evaluate(tag: str, out_dir: str) -> dict:
         p, secs = blk.split(":")
         blocks.append((t0, t0 + float(secs), p)); t0 += float(secs)
     res = {}
-    for a, b, p in blocks:
+    for k, (a, b, p) in enumerate(blocks):
         dec = [e["would_swipe"] for e in ev if e.get("would_swipe") and a <= e["t"] < b]
-        res[p] = (sum(1 for d in dec if d == p), len(dec))
+        res[f"{k}:{p}"] = (sum(1 for d in dec if d == p), len(dec))
     ok = sum(v[0] for v in res.values()); n = sum(v[1] for v in res.values())
-    print(f"{tag}: decoder side correct  " + "  ".join(f"{p}-block {v[0]}/{v[1]}" for p, v in res.items())
+    print(f"{tag}: decoder side correct  " + "  ".join(f"{key.split(':')[1]}-block {v[0]}/{v[1]}" for key, v in res.items())
           + f"  overall {ok}/{n} = {ok / max(1, n):.2f}")
     return dict(tag=tag, blocks=res, correct=ok, total=n, fraction=ok / max(1, n), scripted=script)
 

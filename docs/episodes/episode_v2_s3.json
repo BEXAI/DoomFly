@@ -74,8 +74,8 @@
    "L"
   ]
  ],
- "side_matches_eye_onset": 13,
- "side_match_fraction": 0.7647058823529411,
+ "side_matches_eye_onset": 12,
+ "side_match_fraction": 0.7058823529411765,
  "median_gap_s": 1.4559999999999995,
  "chains_gap_lt_0p6s": 7,
  "posts": {
@@ -87,7 +87,7 @@
  "dn_rate_hz_mean": 0.5479147640791475,
  "dn_rate_hz_peak": 24.781202435312025,
  "dn_rate_at_swipe_hz": 10.078118005192943,
- "dn_rate_1s_before_swipe_hz": 2.124089742441878,
+ "dn_rate_1s_before_swipe_hz": 0.46605400150927945,
  "leg_spikes_after_swipe": {
   "L": 78.23529411764706,
   "R": 53.0

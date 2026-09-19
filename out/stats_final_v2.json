@@ -5,5 +5,5 @@
  "total spikes": "5,149,198",
  "simulated time": "50 s",
  "mean rate": "0.62 Hz / neuron",
- "DN rate at swipe": "7.9 Hz (vs 2.4 Hz 1 s earlier)"
+ "DN rate at swipe": "7.9 Hz (vs 0.6 Hz 1 s earlier)"
 }

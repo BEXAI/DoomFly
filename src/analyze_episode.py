@@ -50,7 +50,7 @@ def analyse(tag: str, out_dir: str = os.path.join(ROOT, "out")) -> dict:
         match.append(L != R and (side == "L") == (L > R))   # a tie never counts as a match
     # burst -> swipe latency: for each swipe, time since DN rate last crossed 20% of its peak
     # DN response around swipes
-    lags = np.arange(-25, 40)
+    lags = np.arange(-63, 40)   # -63 steps = 1.0 s before the swipe
     dn_around = np.array([[dn_hz[i + l] if 0 <= i + l < len(dn_hz) else np.nan for l in lags] for _, _, i in swipes]) if swipes else np.zeros((0, lags.size))
     # chain statistics
     ts = np.array([s[0] for s in swipes])
@@ -66,7 +66,7 @@ def analyse(tag: str, out_dir: str = os.path.join(ROOT, "out")) -> dict:
         mean_pop_rate_hz=float(tot.sum() / len(ev) / meta.get("substeps", 8) / meta.get("n_neurons", 166700) / dt_sim),
         dn_rate_hz_mean=float(dn_hz.mean()), dn_rate_hz_peak=float(dn_hz.max()),
         dn_rate_at_swipe_hz=float(np.nanmean(dn_around[:, lags == 0])) if swipes else None,
-        dn_rate_1s_before_swipe_hz=float(np.nanmean(dn_around[:, (lags >= -25) & (lags < -19)])) if swipes else None,
+        dn_rate_1s_before_swipe_hz=float(np.nanmean(dn_around[:, (lags >= -63) & (lags < -56)])) if swipes else None,   # 1.0-0.9 s before
         leg_spikes_after_swipe={p: float(np.mean([leg[p][i:i + 30].sum() for _, _, i in swipes])) if swipes else None for p in "LR"},
         eye_mean_hz={"L": float(eyeL.mean()), "R": float(eyeR.mean())},
         meta=meta,

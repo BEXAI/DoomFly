@@ -94,7 +94,10 @@ def meta_for(cond: str, seed: int, duration: float) -> dict:
 
 
 def write_run(cond: str, seed: int, duration: float, out_dir: str, prefix: str) -> str:
-    rng = np.random.default_rng(seed * 7919 + {"real": 1, "dopamine": 2, "shuffled": 3, "random": 4}[cond])
+    cond_ids = {"real": 1, "dopamine": 2, "shuffled": 3, "random": 4}
+    if cond not in cond_ids:
+        raise SystemExit(f"unknown condition {cond!r}; choose from {sorted(cond_ids)}")
+    rng = np.random.default_rng(seed * 7919 + cond_ids[cond])
     n_steps = int(round(duration / CONTROL_DT))
     dt = CONTROL_DT
     biased = cond in ("real", "dopamine")

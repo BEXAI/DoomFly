@@ -505,7 +505,7 @@ def main() -> None:
         resC = test_C(conn, factor, rec_ws, rec_adapt, real_run)
         # drop the long traces from the copies stored under C (they live under B already)
         for k in ("real", "shuffled"):
-            resC[k] = {kk: vv for kk, vv in resC[k].items() if kk != "pop_trace_hz_20ms"} if k == "real" else resC[k]
+            resC[k] = {kk: vv for kk, vv in resC[k].items() if kk != "pop_trace_hz_20ms"}
         results["C"] = resC
         fig_B(resC, os.path.join(args.out, "validate_B_lateral.png"))
         log("wrote validate_B_lateral.png")

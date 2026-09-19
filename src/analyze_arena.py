@@ -46,6 +46,7 @@ vs real (paired sign-flip, exact).  With n = 5 seeds the smallest attainable p i
 from __future__ import annotations
 
 import argparse
+import hashlib
 import itertools
 import json
 import math
@@ -123,7 +124,11 @@ def load_run(path: str) -> Tuple[dict, List[dict]]:
             line = line.strip()
             if not line:
                 continue
-            rec = json.loads(line)
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError as e:
+                warn(f"{os.path.basename(path)}: bad JSON at file line {i + 1} ({e.msg}); keeping the {len(steps)} complete steps before it")
+                break
             if i == 0 and "meta" in rec and "step" not in rec:
                 meta = rec["meta"]
                 continue
@@ -206,6 +211,10 @@ def approach_rate(idx: np.ndarray, dist: np.ndarray, win: int) -> Optional[float
 def run_metrics(meta: dict, steps: List[dict], cond: str, seed: int) -> dict:
     dt = float(meta.get("control_dt") or 0.016)
     n = len(steps)
+    expected = meta.get("n_steps") or (int(round(float(meta["duration"]) / dt)) if meta.get("duration") else None)
+    truncated = bool(expected and n < int(expected))
+    if truncated:
+        warn(f"{cond} s{seed}: {n} steps but {expected} expected; metrics computed on the partial run")
     t = np.array([s.get("t", i * dt) for i, s in enumerate(steps)], float)
     T = float(t[-1] + dt) if n else 0.0
     on = np.array([bool(s.get("on_phone", False)) for s in steps], bool)
@@ -266,10 +275,11 @@ def run_metrics(meta: dict, steps: List[dict], cond: str, seed: int) -> dict:
         posts=steps[-1].get("posts") if n else None,
         start=dict(x=steps[0]["pose"]["x"], y=steps[0]["pose"]["y"]) if n and "pose" in steps[0] else None,
         fixture=bool(meta.get("fixture", False)),
+        truncated=truncated,
     )
     # traces kept for figures (not written to JSON)
-    res["_trace"] = dict(t=t, x=np.array([s["pose"]["x"] for s in steps], float) if n else np.zeros(0),
-                         y=np.array([s["pose"]["y"] for s in steps], float) if n else np.zeros(0),
+    res["_trace"] = dict(t=t, x=np.array([s.get("pose", {}).get("x", np.nan) for s in steps], float) if n else np.zeros(0),
+                         y=np.array([s.get("pose", {}).get("y", np.nan) for s in steps], float) if n else np.zeros(0),
                          dist=dist, w_ratio=w_ratio, reward_idx=rising_edges(reward), on=on)
     return res
 
@@ -285,9 +295,11 @@ def bootstrap_ci(vals: Sequence[float], rng: np.random.Generator, n_boot: int = 
     return float(lo), float(hi)
 
 
-def summarise(vals: Sequence[Optional[float]], seeds: Sequence[int], rng: np.random.Generator) -> dict:
+def summarise(vals: Sequence[Optional[float]], seeds: Sequence[int], rng: np.random.Generator, key: str = "") -> dict:
     pairs = [(s, v) for s, v in zip(seeds, vals) if v is not None and not (isinstance(v, float) and math.isnan(v))]
     x = [v for _, v in pairs]
+    if key:   # independent, reproducible stream per (condition, metric)
+        rng = np.random.default_rng([BOOT_SEED, int.from_bytes(hashlib.md5(key.encode()).digest()[:4], 'little')])
     lo, hi = bootstrap_ci(x, rng)
     return dict(mean=float(np.mean(x)) if x else None, ci95=[lo, hi], n=len(x),
                 sd=float(np.std(x, ddof=1)) if len(x) > 1 else None,
@@ -310,18 +322,22 @@ def perm_test_unpaired(a: Sequence[float], b: Sequence[float], rng: np.random.Ge
             sa = pooled[list(comb)].sum()
             diffs.append(sa / n_a - (total - sa) / (n_tot - n_a))
         method, n_used = "exact", n_comb
+        min_p: Optional[float] = float((2.0 if n_a == n_tot - n_a else 1.0) / n_comb)
+        d = np.asarray(diffs)
+        p = float(np.mean(np.abs(d) >= abs(obs) - 1e-12))
     else:
         for _ in range(n_perm):
             perm = rng.permutation(pooled)
             diffs.append(perm[:n_a].mean() - perm[n_a:].mean())
         method, n_used = "monte_carlo", n_perm
-    d = np.asarray(diffs)
-    p = float(np.mean(np.abs(d) >= abs(obs) - 1e-12))
+        min_p = None
+        d = np.asarray(diffs)
+        p = float((np.sum(np.abs(d) >= abs(obs) - 1e-12) + 1) / (n_perm + 1))   # observed included
     return dict(p=p, observed=obs, n_a=int(n_a), n_b=int(n_tot - n_a), method=method, n_permutations=int(n_used),
-                min_attainable_p=float(2.0 / n_used) if method == "exact" else None)
+                min_attainable_p=min_p)
 
 
-def perm_test_paired(d: Sequence[float], rng: np.random.Generator, max_exact: int = 20, n_perm: int = 10000) -> dict:
+def perm_test_paired(d: Sequence[float], rng: np.random.Generator, max_exact: int = 16, n_perm: int = 10000) -> dict:
     """Two-sided sign-flip test on paired differences (mean of d)."""
     d_ = np.asarray(d, float)
     n = d_.size
@@ -329,14 +345,16 @@ def perm_test_paired(d: Sequence[float], rng: np.random.Generator, max_exact: in
         return dict(p=None, observed=None, n=0, method="none")
     obs = float(d_.mean())
     if n <= max_exact:
-        signs = np.array(list(itertools.product([-1.0, 1.0], repeat=n)))
+        bits = (np.arange(2 ** n, dtype=np.int64)[:, None] >> np.arange(n)) & 1
+        signs = bits.astype(float) * 2.0 - 1.0
         means = (signs * d_).mean(axis=1)
         method, n_used = "exact", int(2 ** n)
+        p = float(np.mean(np.abs(means) >= abs(obs) - 1e-12))
     else:
         signs = rng.choice([-1.0, 1.0], size=(n_perm, n))
         means = (signs * d_).mean(axis=1)
         method, n_used = "monte_carlo", n_perm
-    p = float(np.mean(np.abs(means) >= abs(obs) - 1e-12))
+        p = float((np.sum(np.abs(means) >= abs(obs) - 1e-12) + 1) / (n_perm + 1))   # observed included
     return dict(p=p, observed=obs, n=int(n), method=method, n_permutations=n_used,
                 min_attainable_p=float(2.0 / n_used) if method == "exact" else None)
 
@@ -570,7 +588,7 @@ def analyse(out_dir: str, conds: List[str], seeds: List[int], prefix: str) -> di
         ss = sorted(rs)
         per_condition[cond] = {"n_runs": len(ss), "seeds": ss}
         for m in RUN_METRICS:
-            per_condition[cond][m] = summarise([rs[s][m] for s in ss], ss, rng)
+            per_condition[cond][m] = summarise([rs[s][m] for s in ss], ss, rng, key=f"{cond}:{m}")
 
     comparisons: Dict[str, Any] = {}
     if "dopamine" in runs and "real" in runs:
@@ -579,7 +597,7 @@ def analyse(out_dir: str, conds: List[str], seeds: List[int], prefix: str) -> di
         for m in RUN_METRICS:
             d = [(s, runs["dopamine"][s][m] - runs["real"][s][m]) for s in common
                  if runs["dopamine"][s][m] is not None and runs["real"][s][m] is not None]
-            paired[m] = summarise([v for _, v in d], [s for s, _ in d], rng)
+            paired[m] = summarise([v for _, v in d], [s for s, _ in d], rng, key=f"paired:{m}")
         top_d = [runs["dopamine"][s]["time_on_phone"] - runs["real"][s]["time_on_phone"] for s in common]
         paired["time_on_phone_signflip_test"] = perm_test_paired(top_d, rng)
         learn_d = [runs["dopamine"][s]["learning"] - runs["real"][s]["learning"] for s in common

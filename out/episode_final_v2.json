@@ -131,7 +131,7 @@
  "dn_rate_hz_mean": 0.710517503805175,
  "dn_rate_hz_peak": 23.877473363774733,
  "dn_rate_at_swipe_hz": 7.938206675364209,
- "dn_rate_1s_before_swipe_hz": 2.3864449699209973,
+ "dn_rate_1s_before_swipe_hz": 0.5506340664119529,
  "leg_spikes_after_swipe": {
   "L": 59.785714285714285,
   "R": 39.857142857142854
