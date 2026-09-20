@@ -1,0 +1,45 @@
+{
+ "condition": "dopamine",
+ "seed": 100,
+ "duration": 600.0,
+ "log": "out/train/arena_train_pinned_s100.jsonl",
+ "time_on_phone_frac": 1.0,
+ "swipes": {
+  "L": 176,
+  "R": 359
+ },
+ "swipes_forced": 299,
+ "swipes_blocked": 0,
+ "rewards": 165,
+ "loaded_weights": null,
+ "pin_on_phone": true,
+ "forced_swipe_s": 2.0,
+ "final_w_ratio": 0.6259356141090393,
+ "wall_hits": 0,
+ "wall_s": 826.1735394001007,
+ "ms_per_control_step": 22.03129438400269,
+ "ms_eye_encode_per_step": 1.2438588070400767,
+ "ms_brain_per_step": 20.570346036479915,
+ "pop_rates_hz": {
+  "eye_L": 19.188449152542372,
+  "eye_R": 21.72270588235294,
+  "dn_L": 1.1535492886178862,
+  "dn_R": 1.2832973251028807,
+  "dna_L": 2.666025641025641,
+  "dna_R": 2.3267307692307693,
+  "leg_L": 0.8858578431372549,
+  "leg_R": 0.593457711442786,
+  "kc": 0.9086798720472441,
+  "mbon": 4.78946735395189,
+  "pam": 8.317927215189874,
+  "med_L": 0.2519835177240912,
+  "med_R": 0.3483959505061867
+ },
+ "mean_pop_rate_hz": 0.7150773345330933,
+ "saved_weights": {
+  "path": "out/train/trained_w.npz",
+  "n_edges": 33496,
+  "mean_w_over_w0": 0.6259356141090393,
+  "min_w_over_w0": 0.19999998807907104
+ }
+}

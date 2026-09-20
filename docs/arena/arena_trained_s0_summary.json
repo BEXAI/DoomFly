@@ -1,0 +1,46 @@
+{
+ "condition": "trained",
+ "seed": 0,
+ "duration": 120.0,
+ "log": "/home/user/DoomFly/out/arena_trained_s0.jsonl",
+ "time_on_phone_frac": 0.0,
+ "swipes": {
+  "L": 0,
+  "R": 0
+ },
+ "swipes_forced": 0,
+ "swipes_blocked": 20,
+ "rewards": 0,
+ "loaded_weights": {
+  "path": "out/train/trained_w.npz",
+  "n_edges": 33496,
+  "mean_w_over_w0": 0.6259356629777036,
+  "min_w_over_w0": 0.1999999952881703,
+  "frac_changed": 0.614849534272749,
+  "source": "arena_train_pinned_s100"
+ },
+ "pin_on_phone": false,
+ "forced_swipe_s": 0.0,
+ "final_w_ratio": 1.0,
+ "wall_hits": 4,
+ "wall_s": 208.44383716583252,
+ "ms_per_control_step": 27.792511622111004,
+ "ms_eye_encode_per_step": 0.6108455961345499,
+ "ms_brain_per_step": 26.961074333732967,
+ "pop_rates_hz": {
+  "eye_L": 10.312052730696799,
+  "eye_R": 8.811858076563958,
+  "dn_L": 0.18602642276422765,
+  "dn_R": 0.2018647119341564,
+  "dna_L": 0.4044871794871795,
+  "dna_R": 0.31570512820512825,
+  "leg_L": 0.1442401960784314,
+  "leg_R": 0.08669154228855722,
+  "kc": 0.11936720800524935,
+  "mbon": 0.4742268041237113,
+  "pam": 0.028982067510548524,
+  "med_L": 0.19148227590878303,
+  "med_R": 0.19632733408323957
+ },
+ "mean_pop_rate_hz": 0.26582188562287545
+}

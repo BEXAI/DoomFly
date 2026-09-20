@@ -468,7 +468,50 @@ for sd in 0 1 2 3 4; do python3 src/run_arena.py --condition trained --seed $sd 
 python3 src/analyze_arena.py            # adds the `trained` row and the trained − real paired comparison
 ```
 
-RESULTS_92_PLACEHOLDER
+**Training outcome (`docs/arena/arena_train_pinned_s100_summary.json`).** In 600 s on the phone the
+fly received 299 forced swipes and made 236 of its own, saw 165 novel posts, i.e. 165 dopamine
+rewards, and its KC→MBON weights fell to **0.63 w₀** on average, with the most active edges at the
+0.2 floor. The training did what it was meant to: the mushroom-body output changed. In the free
+test the trained flies' MBON rate is 0.83 Hz against 1.12 Hz with the untrained wiring (−26 %),
+with the same visual input statistics.
+
+**Test outcome (five seeds, 120 s, `trained` vs `real`, same seeds):**
+
+| condition | time on phone | within reach | visits | swipes applied | mean visit | MBON Hz |
+|---|---|---|---|---|---|---|
+| real | 15 % [3, 34] | 16 % | 1.4 | 9.2 | 20 s | 1.12 |
+| trained | 10 % [0, 22] | 11 % | 1.2 | 4.6 | 11 s | 0.83 |
+
+| seed | 0 | 1 | 2 | 3 | 4 |
+|---|---|---|---|---|---|
+| real, time on phone | 0 % | 9.5 % | 4.8 % | 4.4 % | 54 % |
+| trained, time on phone | 0 % | 30 % | 0 % | 22 % | 0 % |
+
+Paired trained minus real: −4.3 points of time on the phone [−30, +15], −0.2 visits, exact
+sign-flip p = 0.88; unpaired permutation p = 0.75. Two seeds went up (1 and 3), one stayed at
+zero, two went down (seed 4 lost its 60 s visit entirely, because the trained brain steered
+differently in the first seconds and never came near the phone).
+
+**Honest reading.** Ten minutes of forced, rewarded scrolling trained the synapses but not the
+behaviour. The fly did not come back for the phone more often; if anything it spent less time on
+it. The reason is structural and worth stating plainly: in this model the mushroom-body output
+neurons have no strong route to the descending neurons that set walking speed and turning. The
+MBONs changed their firing by a quarter, but the descending population that drives the body is
+dominated by the visual pathways, which the training did not touch. In a real fly, MBON activity
+biases approach and avoidance through downstream neuromodulatory and central-complex circuits;
+here the same anatomical connections exist in the wiring, but under a uniform LIF model with
+depression-only plasticity they do not carry enough weight to change where the fly walks. So the
+answer to "does it choose the phone after being made to use it" is **no**, and the experiment says
+why: we know how to change what the fly's memory centre says about the phone, and we can see it
+change; we do not have a motor pathway through which that memory can express a preference.
+
+What would test the idea properly: a modulatory (non-spiking) treatment of dopamine so the
+depression is stimulus-specific; a validated MBON → descending-neuron readout (or the central
+complex's role in goal-directed steering) instead of DN rate alone; 20+ seeds; and a
+counter-balanced control in which the same 600 s of forced scrolling pairs dopamine with the
+*absence* of the phone.
+
+Figures: `docs/figures/arena_trajectories.png` (five panels), `arena_time_on_phone.png`.
 
 ## 10. Attribution (CC-BY)
 
